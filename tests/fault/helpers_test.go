@@ -21,22 +21,36 @@ const faultTimeout = 10 * time.Second
 // helloTimeoutLimit 覆盖插件 2s 握手超时 + 退出余量，用于断言插件不会永久挂起。
 const helloTimeoutLimit = 6 * time.Second
 
-// findBinary 从测试目录向上找仓根的 bin/dns；找不到直接失败（不跳过）。
+// findBinary 从测试目录向上找仓根的 bin/dns；若尚未构建，则从源码临时构建真实二进制。
+// 无论哪条路径，故障测试针对的都是真进程，不 mock、不 t.Skip。
 func findBinary(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("取工作目录失败: %v", err)
 	}
+	root := ""
 	for i := 0; i < 5; i++ {
 		candidate := filepath.Join(dir, "bin", "dns")
 		if st, statErr := os.Stat(candidate); statErr == nil && !st.IsDir() {
 			return candidate
 		}
+		if _, statErr := os.Stat(filepath.Join(dir, "go.mod")); statErr == nil {
+			root = dir
+			break
+		}
 		dir = filepath.Dir(dir)
 	}
-	t.Fatalf("未找到 bin/dns，请先执行 make build（起点目录 %s）", dir)
-	return ""
+	if root == "" {
+		t.Fatalf("未找到仓根（含 go.mod），起点目录 %s", dir)
+	}
+	built := filepath.Join(t.TempDir(), "dns")
+	cmd := exec.Command("go", "build", "-o", built, ".")
+	cmd.Dir = root
+	if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
+		t.Fatalf("临时构建 dns 二进制失败: %v\n%s", buildErr, out)
+	}
+	return built
 }
 
 // startPlugin 在临时 UDS 上拉起真实插件进程，返回进程与连接函数。
