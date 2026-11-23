@@ -10,7 +10,7 @@ DIST := dist
 VERSION := $(shell sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' info.json | head -n 1)
 PACKAGE := $(DIST)/$(ID)-$(VERSION).tar.gz
 
-.PHONY: build dist check clean
+.PHONY: build dist check fault clean
 
 # 静态构建：G-16 兼容性基线（CGO_ENABLED=0 + GOWORK=off + GOAMD64=v1 + trimpath + -s -w）。
 build:
@@ -94,6 +94,10 @@ check:
 	@out="$$(gofmt -l .)"; if [ -n "$$out" ]; then echo "gofmt 需要格式化："; echo "$$out"; exit 1; fi; echo "gofmt: clean"
 	GOWORK=off go vet ./...
 	GOWORK=off go test -timeout 200s ./...
+
+# 故障注入：kill / 握手超时 / 状态目录不可写 / 依赖缺失降级（四类）。
+fault: build
+	GOWORK=off go test -timeout 200s ./tests/fault/
 
 clean:
 	rm -rf bin dist

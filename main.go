@@ -1,6 +1,10 @@
-// Package main 是 kore 的 dns 插件：DNS 区域 / 记录管理的骨架实现。
+// Package main 是 kore 的 dns 插件：引擎无关的 DNS 管理（只读）。
 //
-// 本插件只做参数校验与结构化返回，不实际改动宿主 DNS 服务（基础级 0.1.0 口径）。
+// 插件不内置 DNS 服务，只检测并读取宿主已有的 systemd-resolved / dnsmasq / bind9 /
+// coredns：dns.status 报引擎与监听/上游，dns.zones / dns.records 解析区域文件，
+// dns.query 做真实查询，dns.config.get/set 管插件配置。改 zone 属于写操作，需要 root，
+// 因此本版本只读；写路径按 ADR-0018 的 root_actions 通道另行落地。
+//
 // 协议面（kore.plugin.v1）：连接内核注入的 UDS → kore.hello 握手 → 会话循环
 // 读 request、按 method 分发并回 response；stdout 留给协议，日志一律写 stderr。
 package main

@@ -9,12 +9,11 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// invoke 发一个请求并读回响应与 serve 结束状态（每个用例独立连接、独立 store）。
-func invoke(t *testing.T, method, reqID string, params json.RawMessage) *pluginapi.Response {
+// invoke 发一个请求并读回响应，然后 shutdown 收尾（每个用例独立连接、独立状态目录）。
+func invoke(t *testing.T, cfg *config, method, reqID string, params json.RawMessage) *pluginapi.Response {
 	t.Helper()
 	pluginConn, kernelConn := net.Pipe()
 	defer func() { _ = kernelConn.Close() }()
-	cfg := testConfig()
 	done := startServe(pluginConn, cfg)
 	writeRequest(t, kernelConn, method, reqID, params)
 	response := readResponse(t, kernelConn)
@@ -28,137 +27,207 @@ func invoke(t *testing.T, method, reqID string, params json.RawMessage) *plugina
 	return response
 }
 
-// resultString 断言无错误并返回 result 原文。
-func resultString(t *testing.T, response *pluginapi.Response) string {
-	t.Helper()
+// TestPing 协议必选方法：结构化状态 + req_id 回显。
+func TestPing(t *testing.T) {
+	cfg := testConfig(t)
+	response := invoke(t, cfg, "kore.ping", "r-ping", nil)
 	if response.Error != nil {
-		t.Fatalf("意外错误: code=%s message=%s", response.Error.Code, response.Error.Message)
+		t.Fatalf("ping 失败: %v", response.Error)
 	}
-	return string(response.Result)
-}
-
-// TestZoneList 覆盖 list 裸名/全名、req_id 回显与空列表结构化结果。
-func TestZoneList(t *testing.T) {
-	for _, method := range []string{"zone.list", "dns.zone.list"} {
-		t.Run(method, func(t *testing.T) {
-			response := invoke(t, method, "r-1", nil)
-			if response.ReqID != "r-1" {
-				t.Fatalf("req_id=%q，期望回显 r-1", response.ReqID)
-			}
-			if got := resultString(t, response); got != `{"zones":null,"count":0,"applied":false}` {
-				t.Fatalf("result=%s", got)
-			}
-		})
+	if response.ReqID != "r-ping" {
+		t.Fatalf("req_id=%q", response.ReqID)
+	}
+	var result statusResult
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatalf("解析 ping 结果失败: %v", err)
+	}
+	if result.Status != "ready" {
+		t.Fatalf("status=%q", result.Status)
+	}
+	if result.Goroutines <= 0 || result.RSSKB <= 0 {
+		t.Fatalf("goroutines/rss 异常: %+v", result)
 	}
 }
 
-// TestRecordAdd 覆盖四类合法记录：结构化结果字段、req_id、applied=false。
-func TestRecordAdd(t *testing.T) {
+// TestConfigGet config.get 返回 schema + values + source，字段与默认值齐全。
+func TestConfigGet(t *testing.T) {
+	cfg := testConfig(t)
+	for _, method := range []string{"config.get", "dns.config.get"} {
+		response := invoke(t, cfg, method, "r-get", nil)
+		if response.Error != nil {
+			t.Fatalf("%s 失败: %v", method, response.Error)
+		}
+		var result struct {
+			Schema struct {
+				Title  string `json:"title"`
+				Fields []struct {
+					Key      string          `json:"key"`
+					Type     string          `json:"type"`
+					Default  json.RawMessage `json:"default"`
+					Required bool            `json:"required"`
+					Help     string          `json:"help"`
+				} `json:"fields"`
+			} `json:"schema"`
+			Values map[string]any `json:"values"`
+			Source string         `json:"source"`
+		}
+		if err := json.Unmarshal(response.Result, &result); err != nil {
+			t.Fatalf("解析 config.get 失败: %v", err)
+		}
+		if len(result.Schema.Fields) != 6 {
+			t.Fatalf("字段数=%d，期望 6", len(result.Schema.Fields))
+		}
+		for _, field := range result.Schema.Fields {
+			if field.Key == "" || field.Type == "" || len(field.Default) == 0 || !field.Required || field.Help == "" {
+				t.Fatalf("字段描述不完整: %+v", field)
+			}
+		}
+		if result.Source != "default" {
+			t.Fatalf("source=%q，期望 default", result.Source)
+		}
+		if result.Values["engine"] != "auto" {
+			t.Fatalf("engine=%v，期望 auto", result.Values["engine"])
+		}
+	}
+}
+
+// TestConfigSetRoundTrip config.set 保存后 config.get 的 source 变 file，值生效。
+func TestConfigSetRoundTrip(t *testing.T) {
+	cfg := testConfig(t)
+	response := invoke(t, cfg, "dns.config.set", "r-set", json.RawMessage(`{"values":{"engine":"dnsmasq","query_timeout_ms":1500}}`))
+	if response.Error != nil {
+		t.Fatalf("config.set 失败: %v", response.Error)
+	}
+	var setResult struct {
+		Saved           bool     `json:"saved"`
+		Applied         bool     `json:"applied"`
+		RestartRequired bool     `json:"restart_required"`
+		Warnings        []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(response.Result, &setResult); err != nil {
+		t.Fatalf("解析 config.set 结果失败: %v", err)
+	}
+	if !setResult.Saved || !setResult.Applied || setResult.RestartRequired {
+		t.Fatalf("set 结果不合格: %+v", setResult)
+	}
+	if cfg.values.Engine != "dnsmasq" || cfg.values.QueryTimeoutMs != 1500 {
+		t.Fatalf("内存值未更新: %+v", cfg.values)
+	}
+	if cfg.values.BindConf != "/etc/bind/named.conf.local" {
+		t.Fatalf("未提供的字段应保持原值: %+v", cfg.values)
+	}
+
+	get := invoke(t, cfg, "config.get", "r-get", nil)
+	if get.Error != nil {
+		t.Fatalf("config.get 失败: %v", get.Error)
+	}
+	if !strings.Contains(string(get.Result), `"source":"file"`) {
+		t.Fatalf("source 未变 file: %s", get.Result)
+	}
+	if !strings.Contains(string(get.Result), `"engine":"dnsmasq"`) {
+		t.Fatalf("engine 未生效: %s", get.Result)
+	}
+}
+
+// TestConfigSetInvalid 非法值被拒绝且不落盘、不改内存。
+func TestConfigSetInvalid(t *testing.T) {
+	cfg := testConfig(t)
 	cases := []struct {
 		name   string
 		params string
 		want   string
 	}{
-		{
-			name:   "A",
-			params: `{"zone":"example.com","name":"www.example.com","type":"A","value":"192.0.2.10"}`,
-			want:   `{"zone":"example.com","name":"www.example.com","type":"A","value":"192.0.2.10","ttl":3600,"applied":false,"added":true}`,
-		},
-		{
-			name:   "AAAA",
-			params: `{"zone":"example.com","name":"v6.example.com","type":"AAAA","value":"2001:db8::1"}`,
-			want:   `{"zone":"example.com","name":"v6.example.com","type":"AAAA","value":"2001:db8::1","ttl":3600,"applied":false,"added":true}`,
-		},
-		{
-			name:   "CNAME",
-			params: `{"zone":"example.com","name":"alias.example.com","type":"CNAME","value":"www.example.com"}`,
-			want:   `{"zone":"example.com","name":"alias.example.com","type":"CNAME","value":"www.example.com","ttl":3600,"applied":false,"added":true}`,
-		},
-		{
-			name:   "MX",
-			params: `{"zone":"example.com","name":"example.com","type":"MX","value":"10 mail.example.com","ttl":600}`,
-			want:   `{"zone":"example.com","name":"example.com","type":"MX","value":"10 mail.example.com","ttl":600,"applied":false,"added":true}`,
-		},
+		{"非对象", `"x"`, "params 必须是 JSON 对象"},
+		{"缺 values", `{}`, "缺少必填字段 values"},
+		{"未知引擎", `{"values":{"engine":"powerdns"}}`, "engine 不支持"},
+		{"越界白名单", `{"values":{"bind_conf":"/etc/passwd"}}`, "只读白名单"},
+		{"相对路径", `{"values":{"dnsmasq_dir":"etc/dnsmasq.d"}}`, "绝对路径"},
+		{"超时越界", `{"values":{"query_timeout_ms":10}}`, "超出"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			response := invoke(t, "dns.record.add", "r-"+tc.name, json.RawMessage(tc.params))
-			if response.ReqID != "r-"+tc.name {
-				t.Fatalf("req_id=%q", response.ReqID)
-			}
-			if got := resultString(t, response); got != tc.want {
-				t.Fatalf("result=%s\n期望 %s", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestRecordAddInvalid 覆盖非法参数：缺字段、非法域名、非法 IP、不支持类型、非法 MX、越界 TTL。
-func TestRecordAddInvalid(t *testing.T) {
-	cases := []struct {
-		name     string
-		params   string
-		contains string
-	}{
-		{name: "params 非对象", params: `"x"`, contains: "params 必须是 JSON 对象"},
-		{name: "缺 zone", params: `{"name":"www.example.com","type":"A","value":"192.0.2.1"}`, contains: "缺少必填字段 zone"},
-		{name: "大写域名", params: `{"zone":"Example.COM","name":"www.example.com","type":"A","value":"192.0.2.1"}`, contains: "zone 必须为小写"},
-		{name: "单标签 zone", params: `{"zone":"localhost","name":"www.example.com","type":"A","value":"192.0.2.1"}`, contains: "至少两个标签"},
-		{name: "路径穿越", params: `{"zone":"../etc","name":"www.example.com","type":"A","value":"192.0.2.1"}`, contains: "zone 非法"},
-		{name: "非法 A", params: `{"zone":"example.com","name":"www.example.com","type":"A","value":"999.1.1.1"}`, contains: "A 记录的 value"},
-		{name: "A 用 IPv6", params: `{"zone":"example.com","name":"www.example.com","type":"A","value":"2001:db8::1"}`, contains: "A 记录的 value"},
-		{name: "非法 AAAA", params: `{"zone":"example.com","name":"www.example.com","type":"AAAA","value":"192.0.2.1"}`, contains: "AAAA 记录的 value"},
-		{name: "不支持类型", params: `{"zone":"example.com","name":"www.example.com","type":"TXT","value":"x"}`, contains: "type 不支持"},
-		{name: "非法 CNAME", params: `{"zone":"example.com","name":"a.example.com","type":"CNAME","value":"_bad"}`, contains: "value 非法"},
-		{name: "非法 MX 优先级", params: `{"zone":"example.com","name":"example.com","type":"MX","value":"x mail.example.com"}`, contains: "MX 优先级"},
-		{name: "MX 缺目标", params: `{"zone":"example.com","name":"example.com","type":"MX","value":"10"}`, contains: "优先级 域名"},
-		{name: "TTL 越界", params: `{"zone":"example.com","name":"www.example.com","type":"A","value":"192.0.2.1","ttl":-1}`, contains: "ttl 必须在"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			response := invoke(t, "dns.record.add", "r-1", json.RawMessage(tc.params))
+			response := invoke(t, cfg, "config.set", "r-bad", json.RawMessage(tc.params))
 			if response.Error == nil {
-				t.Fatalf("期望 E_INVALID，实际 result=%s", response.Result)
+				t.Fatalf("期望错误，实际成功: %s", response.Result)
 			}
 			if response.Error.Code != pluginapi.E_INVALID {
-				t.Fatalf("error code=%s，期望 %s", response.Error.Code, pluginapi.E_INVALID)
+				t.Fatalf("错误码=%s，期望 E_INVALID", response.Error.Code)
 			}
-			if !strings.Contains(response.Error.Message, tc.contains) {
-				t.Fatalf("error message=%q，期望包含 %q", response.Error.Message, tc.contains)
+			if !strings.Contains(response.Error.Message, tc.want) {
+				t.Fatalf("message=%q，未含 %q", response.Error.Message, tc.want)
+			}
+			if cfg.values != defaultValues() {
+				t.Fatalf("校验失败不应改内存: %+v", cfg.values)
+			}
+			if cfg.store.Exists() {
+				t.Fatal("校验失败不应写配置文件")
 			}
 		})
 	}
 }
 
-// TestUnknownMethod 未知方法回 E_NOTFOUND。
-func TestUnknownMethod(t *testing.T) {
-	response := invoke(t, "dns.nope", "r-1", nil)
-	if response.Error == nil || response.Error.Code != pluginapi.E_NOTFOUND {
-		t.Fatalf("error=%v，期望 E_NOTFOUND", response.Error)
+// TestReloadDigest kore.reload 重读配置并返回非空摘要。
+func TestReloadDigest(t *testing.T) {
+	cfg := testConfig(t)
+	response := invoke(t, cfg, "kore.reload", "r-reload", nil)
+	if response.Error != nil {
+		t.Fatalf("reload 失败: %v", response.Error)
+	}
+	var result struct {
+		OK           bool   `json:"ok"`
+		ConfigDigest string `json:"config_digest"`
+	}
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatalf("解析 reload 结果失败: %v", err)
+	}
+	if !result.OK || len(result.ConfigDigest) != 16 {
+		t.Fatalf("reload 结果不合格: %+v", result)
 	}
 }
 
-// TestZoneListSeesProposal 同一会话内 record.add 的提案应被 zone.list 聚合可见。
-func TestZoneListSeesProposal(t *testing.T) {
-	cfg := testConfig()
-	pluginConn, kernelConn := net.Pipe()
-	defer func() { _ = kernelConn.Close() }()
-	done := startServe(pluginConn, cfg)
-	writeRequest(t, kernelConn, "dns.record.add", "r-add", json.RawMessage(`{"zone":"example.com","name":"www.example.com","type":"A","value":"192.0.2.1"}`))
-	add := readResponse(t, kernelConn)
-	if add.Error != nil {
-		t.Fatalf("record.add 意外错误: %v", add.Error)
+// TestUnknownMethod 未知方法（含旧骨架方法 zone.list）统一 E_NOTFOUND。
+func TestUnknownMethod(t *testing.T) {
+	cfg := testConfig(t)
+	for _, method := range []string{"dns.zone.list", "dns.record.add", "dns.nope", "zone.list"} {
+		response := invoke(t, cfg, method, "r-404", nil)
+		if response.Error == nil || response.Error.Code != pluginapi.E_NOTFOUND {
+			t.Fatalf("%s 期望 E_NOTFOUND，实际 %v", method, response.Error)
+		}
 	}
-	writeRequest(t, kernelConn, "dns.zone.list", "r-list", nil)
-	list := readResponse(t, kernelConn)
-	if got := string(list.Result); got != `{"zones":[{"name":"example.com","record_count":1}],"count":1,"applied":false}` {
-		t.Fatalf("zone.list result=%s", got)
+}
+
+// TestBusinessVerb 裸名与全名都归一，非业务方法不误判。
+func TestBusinessVerb(t *testing.T) {
+	cases := []struct {
+		method string
+		ok     bool
+		verb   string
+	}{
+		{"dns.status", true, "status"},
+		{"status", true, "status"},
+		{"dns.zones", true, "zones"},
+		{"dns.records", true, "records"},
+		{"dns.query", true, "query"},
+		{"dns.config.get", false, ""},
+		{"kore.ping", false, ""},
+		{"dns.zone.list", false, ""},
 	}
-	writeRequest(t, kernelConn, "kore.shutdown", "r-shutdown", nil)
-	if shutdown := readResponse(t, kernelConn); string(shutdown.Result) != `{"ok":true}` {
-		t.Fatalf("shutdown 结果=%s", shutdown.Result)
+	for _, tc := range cases {
+		verb, ok := businessVerb(tc.method, "dns")
+		if ok != tc.ok || verb != tc.verb {
+			t.Fatalf("businessVerb(%q)=(%q,%v)，期望 (%q,%v)", tc.method, verb, ok, tc.verb, tc.ok)
+		}
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("serve 返回错误: %v", err)
+}
+
+// TestDispatchShutdown shutdown 返回第二布尔值 true 且回 ok。
+func TestDispatchShutdown(t *testing.T) {
+	cfg := testConfig(t)
+	response, shutdown := dispatch(&pluginapi.Request{ID: "i", ReqID: "r", Method: "kore.shutdown"}, cfg, testLogger())
+	if !shutdown {
+		t.Fatal("kore.shutdown 应返回 shutdown=true")
+	}
+	if string(response.Result) != `{"ok":true}` {
+		t.Fatalf("shutdown 结果=%s", response.Result)
 	}
 }
