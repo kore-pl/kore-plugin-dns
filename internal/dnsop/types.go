@@ -1,12 +1,16 @@
-// Package dnsop 实现 DNS 插件的引擎无关只读能力：服务检测、区域 / 记录解析、真实查询。
+// Package dnsop 实现 DNS 插件的引擎无关能力：服务检测、区域 / 记录解析、真实查询与 bind9 记录写入。
 //
 // 三条硬约束：
 //  1. 不内置 DNS 服务：插件只读宿主已有的 systemd-resolved / dnsmasq / bind9 / coredns，
-//     不写任何宿主配置、不启停任何服务（写操作需要 root，留待 root_actions 通道，见 ADR-0018）。
+//     不写任何宿主配置文件、不启停任何服务；写记录只走 bind9 的 **RFC 2136 动态更新**
+//     （`nsupdate` + TSIG 密钥，插件进程自身权限、不经 root）。
 //  2. 引擎无关：检测层只依赖「命令固定 argv + 标准配置路径 + /proc/net 监听套接字」，
 //     四种引擎共用同一套结果形状，UI 不需要按引擎分支。
-//  3. 只读不执行：zone 文件与配置只按文本解析，绝不 source / eval / 拼接 shell。
+//  3. 不执行不可信脚本：zone 文件与配置只按文本解析；写入值逐类型校验后才进 nsupdate 的
+//     行式脚本（拒绝换行/控制字符），绝不 source / eval / 拼接 shell。
 package dnsop
+
+import "time"
 
 // 引擎标识（对外字符串，稳定）。
 const (
@@ -25,6 +29,8 @@ const (
 // 机器可读错误码 / 状态码。E_NEED_ROOT 与 pluginapi.E_NEED_ROOT 同值，
 // 这里用本地常量是为了让 dnsop 的降级口径不依赖 SDK 版本。
 const (
+	// WriteChannel 是记录写入通道标识（bind9 RFC 2136 动态更新）。
+	WriteChannel = "bind9-dynamic-update"
 	// CodeNeedRoot 表示目标文件/动作需要 root，当前进程权限不足。
 	CodeNeedRoot = "E_NEED_ROOT"
 	// CodeNoEngine 表示宿主没有任何被支持的 DNS 服务。
@@ -251,4 +257,75 @@ func DefaultPaths() Paths {
 		DnsmasqDir:  "/etc/dnsmasq.d",
 		ResolvConf:  "/etc/resolv.conf",
 	}
+}
+
+// WriteOptions 是写入通道配置（bind9 动态更新）：服务器、TSIG 密钥、超时与审计日志。
+//
+// Journal 为 nil 表示写通道未装配（例如缺少 KORE_STATE_DIR）——写方法一律
+// fail-closed 返回 E_UNSUPPORTED + 可操作 hint，不做"改了但没记账"的静默写入。
+type WriteOptions struct {
+	// Server 是权威 bind9 实例地址（IP 或主机名），默认 127.0.0.1。
+	Server string
+	// Port 是 DNS 端口，默认 53。
+	Port int
+	// KeyFile 是 TSIG 密钥文件路径（nsupdate -k），空表示写入未启用。
+	KeyFile string
+	// Timeout 是单次更新/校验查询的超时。
+	Timeout time.Duration
+	// Journal 是写操作审计与回滚依据。
+	Journal Journal
+}
+
+// RecordWriteParams 是 record.add / record.update / record.delete 的入参。
+type RecordWriteParams struct {
+	// Zone 是区域名（无尾点）。
+	Zone string `json:"zone"`
+	// Name 是记录名（绝对名，可带尾点）。
+	Name string `json:"name"`
+	// Type 是记录类型（可写：A/AAAA/CNAME/MX/TXT/SRV）。
+	Type string `json:"type"`
+	// Value 是新值；delete 时可省略表示删除该 name/type 的全部值。
+	Value string `json:"value"`
+	// OldValue 可选：update/delete 的旧值前置条件（不一致即 E_CONFLICT）。
+	OldValue string `json:"old_value"`
+	// TTL 是显式 TTL（秒）；0 表示默认 300 或沿用快照。
+	TTL int `json:"ttl"`
+}
+
+// RecordWriteResult 是一次记录写入的真实结果：是否变化、是否已应用、是否已验证生效。
+type RecordWriteResult struct {
+	// Operation 是 add / update / delete。
+	Operation string `json:"operation"`
+	// Channel 是写入通道标识，固定 bind9-dynamic-update。
+	Channel string `json:"channel"`
+	// Zone / Name / Type / Value 是本次操作的目标（Value 为归一后的新值）。
+	Zone  string `json:"zone"`
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Value string `json:"value,omitempty"`
+	// TTL 是实际使用的 TTL（秒）；delete 时为 0。
+	TTL int `json:"ttl,omitempty"`
+	// Previous 是写入前该 name/type 的旧值（回滚依据，最多 10 条）。
+	Previous []string `json:"previous"`
+	// Changed 表示目标状态与现状不同（false 时是幂等空操作）。
+	Changed bool `json:"changed"`
+	// Applied 表示服务器已接受且生效校验通过（幂等空操作也算 true）。
+	Applied bool `json:"applied"`
+	// Verified 表示写后直连权威服务器查询确认了新状态。
+	Verified bool `json:"verified"`
+	// VerifiedBy 是校验方式，固定 dig-direct。
+	VerifiedBy string `json:"verified_by,omitempty"`
+	// RolledBack 表示生效校验失败后已尝试逆操作恢复旧值；false 需人工核对。
+	RolledBack bool `json:"rolled_back"`
+	// Journal 是审计日志文件路径（幂等空操作为空）。
+	Journal string `json:"journal,omitempty"`
+	// ReloadRequired 固定 false：动态更新立即生效，无需 reload 服务。
+	ReloadRequired bool `json:"reload_required"`
+	// Server / Port 是实际使用的权威服务器。
+	Server string `json:"server"`
+	Port   int    `json:"port"`
+	// Hint 是可操作提示（失败或降级时给出）。
+	Hint string `json:"hint,omitempty"`
+	// ErrorCode 是机器可读状态码（成功时为空）。
+	ErrorCode string `json:"error_code,omitempty"`
 }

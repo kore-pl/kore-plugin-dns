@@ -2,6 +2,35 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.3.0] - 2026-11-23
+
+从「引擎无关只读」升级为**可写**：新增 bind9 记录写入（RFC 2136 动态更新），不需要 root、不需要 reload 服务。
+
+### 新增（写路径：bind9 动态更新）
+
+- **三个写方法**：`dns.record.add` / `dns.record.update` / `dns.record.delete`（`{zone, name, type, value, ttl?, old_value?}`），可写类型 `A` / `AAAA` / `CNAME` / `MX` / `TXT` / `SRV`；返回 `{operation, channel, previous[], changed, applied, verified, rolled_back, journal, reload_required, server, port, hint, error_code}`。
+- **原子性**：每个操作是**一条 RFC 2136 UPDATE 消息**（`prereq` + `update delete`/`update add` 同一条消息，服务器原子应用），不是客户端「先删后加两条独立请求」。写前直连权威快照旧值，写后直连 `dig @server` 校验新状态；校验失败自动逆操作回滚并再次校验，`detail.rolled_back` 如实披露。
+- **备份与审计**：下发前先写 journal `<KORE_STATE_DIR>/dns-journal/updates.jsonl`（0600，intent + result 两条，fsync），journal 写失败即中止写操作（不出现「改了但没记账」）；旧值快照同时进结果 `previous[]`，作为回滚依据（动态更新没有本地 zone 文件可备份）。
+- **幂等与冲突**：add 同值幂等（`changed=false, applied=true`，不下发）、异值 `E_CONFLICT`；update 记录不存在 `E_NOTFOUND`、`old_value` 不匹配 `E_CONFLICT`；delete 不存在幂等。
+- **注入面收敛**：`nsupdate` argv 固定（仅 `-k` 密钥、`-p` 端口），zone/name/type/value 全部走 stdin 脚本并逐类型校验（拒绝换行/控制字符，非 TXT 拒绝 `;`，name 必须在 zone 内，TTL 0–86400，TXT ≤255 字节）；`update_key_file` 限白名单目录（`/etc/bind`、`/var/lib/bind`、`/var/lib/kore` 等）。
+- **零 root 依赖**：以插件用户 + TSIG 密钥执行，不写宿主配置、不启停服务、不声明 `root_actions` / `requires_root`，因此**不依赖内核 allowlist / root_actions 扩展**（ADR-0018 的提权通道本版用不上）。
+- **降级（不静默）**：非 bind9 区域 → `E_UNSUPPORTED`+hint；区域不在 `bind_conf`（或不可读）→ `E_NOTFOUND`+hint；未配置 `update_key_file` → `E_UNSUPPORTED`+如何生成 TSIG；缺 `nsupdate`/`dig` → `E_UPSTREAM`；服务器拒绝 → `E_UPSTREAM` + `nsupdate_output` + 按 REFUSED/NOTAUTH/NOTZONE/连接失败分类的 hint。
+- **配置契约新增 4 项**：`update_server`（默认 `127.0.0.1`）、`update_port`（默认 `53`）、`update_key_file`（空=写入未启用）、`update_timeout_ms`（默认 `5000`）；环境变量 `KORE_DNS_UPDATE_*` 兜底；config schema 6 → 10 个字段。
+- **method_capabilities（7 条）**：`status`/`zones`/`records`/`query` → `system:read`；`record.add`/`record.update`/`record.delete` → `system:admin`。插件自身 `capabilities` 保持 `system:read`（调用方授权与插件自身权限分离）。
+- 版本 `0.2.0` → `0.3.0`（新增对外方法与配置字段 → minor）；`manifest.json` 同步。
+
+### 测试
+
+- `internal/dnsop/recordwrite_test.go`：真实写入主链路（快照 → 原子 UPDATE → 直连校验 → journal 两条）、幂等/冲突、update 沿用快照 TTL、delete 幂等、校验失败自动回滚、类型/名字/值/TTL/注入拒绝、写通道 fail-closed（无 journal/无密钥/密钥不可读/缺 nsupdate/缺 dig）、区域归属（未知 `E_NOTFOUND` / dnsmasq `E_UNSUPPORTED`）、journal 落盘 0600 JSONL。
+- `tests/fault/write_channel_test.go`：无 bind9 区域时写方法返回 `E_NOTFOUND`+hint、不产生 journal、插件继续服务（真二进制 + 真 UDS）。
+- `main_test.go`：写入配置校验（地址/端口/密钥白名单/超时）与 detector 写通道装配。
+
+### 诚实披露（未连真实 DNS 服务）
+
+- 本机（2026-11-23）**没有运行中的 bind9、也没有 `rndc`/`named`**；`nsupdate` 与 `dig` 已安装，但无开启 `allow-update` 的权威实例可连。写入链路由 mock 宿主单测覆盖 argv 形状、脚本内容、校验与回滚，**未在真实 DNS 服务上验证生效**——不把单测说成端到端实测。
+- 只支持 bind9：新建/删除 zone 需改 `named.conf`（root 配置面）不在本版；dnsmasq / systemd-resolved / CoreDNS 无动态更新接口，写入一律 `E_UNSUPPORTED`。
+- `depth_level` 保持 `basic`：G-20 要求的「磁盘满 / cgroup 超限」两类规范故障注入仍未补，不冒充 `production`。
+
 ## [0.2.0] - 2026-11-23
 
 ### 新增（从 noop 到 L1.5 真实 DNS 管理）

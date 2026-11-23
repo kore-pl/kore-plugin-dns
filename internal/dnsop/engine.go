@@ -26,6 +26,8 @@ type Detector struct {
 	// DefaultEngine 是配置里保存的引擎偏好（auto/四引擎之一）；
 	// 方法入参未显式指定 engine 时用它，保证 config.set 保存后立即生效。
 	DefaultEngine string
+	// Write 是记录写入通道配置（bind9 动态更新）；只读方法不使用。
+	Write WriteOptions
 }
 
 // paths 返回补齐默认值后的路径集合。

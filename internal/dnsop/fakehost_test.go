@@ -29,17 +29,36 @@ type fakeHost struct {
 	socketErr error
 	// calls 记录实际执行过的命令（断言「只执行固定 argv」用）。
 	calls []string
+	// inputs 记录每次带 stdin 的命令（nsupdate 脚本断言用）。
+	inputs []fakeInput
+	// inputOutputs 是带 stdin 命令的输出；未预置视为命令不可用。
+	inputOutputs map[string]string
+	// inputErrs 是带 stdin 命令的错误。
+	inputErrs map[string]error
+	// cmdSeq / inputSeq 是同一命令的按序返回值（快照 → 校验需要不同应答时用）。
+	cmdSeq   map[string][]string
+	inputSeq map[string][]string
+}
+
+// fakeInput 是一条带 stdin 的命令记录。
+type fakeInput struct {
+	key   string
+	stdin string
 }
 
 // newFakeHost 构造空假宿主。
 func newFakeHost() *fakeHost {
 	return &fakeHost{
-		cmds:       map[string]string{},
-		cmdErrs:    map[string]error{},
-		files:      map[string]string{},
-		permission: map[string]bool{},
-		dirs:       map[string][]string{},
-		binaries:   map[string]bool{},
+		cmds:         map[string]string{},
+		cmdErrs:      map[string]error{},
+		files:        map[string]string{},
+		permission:   map[string]bool{},
+		dirs:         map[string][]string{},
+		binaries:     map[string]bool{},
+		inputOutputs: map[string]string{},
+		inputErrs:    map[string]error{},
+		cmdSeq:       map[string][]string{},
+		inputSeq:     map[string][]string{},
 	}
 }
 
@@ -55,10 +74,32 @@ func (f *fakeHost) Run(_ context.Context, name string, args ...string) (string, 
 	if err, ok := f.cmdErrs[key]; ok {
 		return "", err
 	}
+	if seq := f.cmdSeq[key]; len(seq) > 0 {
+		f.cmdSeq[key] = seq[1:]
+		return seq[0], nil
+	}
 	if out, ok := f.cmds[key]; ok {
 		return out, nil
 	}
 	return "", errors.New("fakeHost: 命令不可用: " + key)
+}
+
+// RunInput 记录 stdin；输出与错误按「命令 + 参数」预置。
+func (f *fakeHost) RunInput(_ context.Context, name string, args []string, stdin string) (string, error) {
+	key := cmdKey(name, args)
+	f.calls = append(f.calls, key)
+	f.inputs = append(f.inputs, fakeInput{key: key, stdin: stdin})
+	if err, ok := f.inputErrs[key]; ok {
+		return "", err
+	}
+	if seq := f.inputSeq[key]; len(seq) > 0 {
+		f.inputSeq[key] = seq[1:]
+		return seq[0], nil
+	}
+	if out, ok := f.inputOutputs[key]; ok {
+		return out, nil
+	}
+	return "", nil
 }
 
 // ReadFile 返回预置内容；permission 标记的路径返回权限错误。

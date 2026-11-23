@@ -2,10 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/pengtang1024/kore-plugin-dns/internal/dnsop"
 	"io"
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,7 +160,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.source != plugincfg.SourceDefault {
 		t.Fatalf("source=%q，期望 default", cfg.source)
 	}
-	if cfg.id != "dns" || cfg.version != "0.2.0" {
+	if cfg.id != "dns" || cfg.version != "0.3.0" {
 		t.Fatalf("id/version=%q/%q", cfg.id, cfg.version)
 	}
 	if err := plugincfg.ValidateSchema(configSchema()); err != nil {
@@ -196,5 +198,61 @@ func TestConfigEngineFeedsDetector(t *testing.T) {
 	}
 	if cfg.queryTimeout().Milliseconds() != int64(cfg.values.QueryTimeoutMs) {
 		t.Fatalf("查询超时未透传: %v", cfg.queryTimeout())
+	}
+}
+
+// TestValidateWriteConfig 覆盖写入配置的校验口径：地址/端口/密钥白名单/超时。
+func TestValidateWriteConfig(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*fileValues)
+	}{
+		{"update_server 非法", func(v *fileValues) { v.UpdateServer = "not a host!" }},
+		{"update_port 越界", func(v *fileValues) { v.UpdatePort = 70000 }},
+		{"update_key_file 不在白名单", func(v *fileValues) { v.UpdateKeyFile = "/tmp/kore-update.key" }},
+		{"update_key_file 含 ..", func(v *fileValues) { v.UpdateKeyFile = "/etc/bind/../bind/kore.key" }},
+		{"update_timeout 越界", func(v *fileValues) { v.UpdateTimeoutMs = 10 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			values := fillDefaults(fileValues{})
+			tc.mutate(&values)
+			if _, perr := validateValues(values); perr == nil {
+				t.Fatalf("%s 应校验失败", tc.name)
+			}
+		})
+	}
+	ok := fillDefaults(fileValues{UpdateKeyFile: "/var/lib/kore/kore-update.key"})
+	if _, perr := validateValues(ok); perr != nil {
+		t.Fatalf("白名单内密钥路径应通过: %s", perr.Message)
+	}
+}
+
+// TestDetectorWiresWriteChannel 写通道必须随配置装配：journal 落在 state 目录、超时取较大者。
+func TestDetectorWiresWriteChannel(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.values.UpdateServer = "127.0.0.1"
+	cfg.values.UpdatePort = 5353
+	cfg.values.UpdateKeyFile = "/var/lib/kore/kore-update.key"
+	cfg.values.UpdateTimeoutMs = 8000
+	detector := cfg.detector()
+	if detector.Write.Journal == nil {
+		t.Fatal("配置了 KORE_STATE_DIR 时写通道必须装配 journal")
+	}
+	if detector.Write.Server != "127.0.0.1" || detector.Write.Port != 5353 || detector.Write.KeyFile != "/var/lib/kore/kore-update.key" {
+		t.Fatalf("写通道未透传: %+v", detector.Write)
+	}
+	if detector.Write.Timeout.Milliseconds() != 8000 {
+		t.Fatalf("写入超时=%v", detector.Write.Timeout)
+	}
+	journal, ok := detector.Write.Journal.(dnsop.FileJournal)
+	if !ok || !strings.HasSuffix(journal.Dir, "dns-journal") {
+		t.Fatalf("journal 目录=%+v，期望 <state>/dns-journal", detector.Write.Journal)
+	}
+	// 缺少 KORE_STATE_DIR 时 journal 必须为 nil（写方法 fail-closed）。
+	cfgNoState := testConfig(t)
+	cfgNoState.stateDir = ""
+	if cfgNoState.detector().Write.Journal != nil {
+		t.Fatal("无 state 目录时不应装配 journal")
 	}
 }

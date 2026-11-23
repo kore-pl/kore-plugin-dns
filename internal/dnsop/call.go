@@ -8,9 +8,10 @@ import (
 	"github.com/pengtang1024/kore/pkg/pluginapi"
 )
 
-// Methods 返回 DNS 只读方法名（不含 config.* 与 kore.* 协议方法）。
+// Methods 返回 DNS 业务方法名（不含 config.* 与 kore.* 协议方法）。
+// 前四个只读；后三个是 bind9 动态更新写入（RFC 2136，无需 root）。
 func Methods() []string {
-	return []string{"status", "zones", "records", "query"}
+	return []string{"status", "zones", "records", "query", "record.add", "record.update", "record.delete"}
 }
 
 // statusParams 是 dns.status / dns.zones 的入参：engine 可选，用于强制/过滤引擎。
@@ -29,7 +30,7 @@ type queryParams struct {
 	Type string `json:"type"`
 }
 
-// Call 执行一个 DNS 只读方法，返回结构化 JSON 结果或结构化错误。
+// Call 执行一个 DNS 业务方法（只读 + 记录写入），返回结构化 JSON 结果或结构化错误。
 func (d Detector) Call(ctx context.Context, method string, params json.RawMessage, queryTimeout time.Duration) (json.RawMessage, *pluginapi.Error) {
 	switch method {
 	case "status":
@@ -75,6 +76,24 @@ func (d Detector) Call(ctx context.Context, method string, params json.RawMessag
 			return nil, perr
 		}
 		return encodeResult("dns.query", result)
+	case "record.add":
+		result, perr := d.RecordAdd(ctx, params)
+		if perr != nil {
+			return nil, perr
+		}
+		return encodeResult("dns.record.add", result)
+	case "record.update":
+		result, perr := d.RecordUpdate(ctx, params)
+		if perr != nil {
+			return nil, perr
+		}
+		return encodeResult("dns.record.update", result)
+	case "record.delete":
+		result, perr := d.RecordDelete(ctx, params)
+		if perr != nil {
+			return nil, perr
+		}
+		return encodeResult("dns.record.delete", result)
 	default:
 		return nil, &pluginapi.Error{Code: pluginapi.E_NOTFOUND, Message: "未知 DNS 方法：" + method}
 	}

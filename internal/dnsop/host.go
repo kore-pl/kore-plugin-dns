@@ -37,6 +37,8 @@ var (
 type Host interface {
 	// Run 执行固定 argv 命令（不经 shell），返回 stdout；命令失败时同时返回已捕获的 stdout。
 	Run(ctx context.Context, name string, args ...string) (string, error)
+	// RunInput 与 Run 相同，但把 stdin 写入子进程（nsupdate 的更新脚本走这里）。
+	RunInput(ctx context.Context, name string, args []string, stdin string) (string, error)
 	// ReadFile 读取文件；不存在返回 ErrNotExist、被拒返回 ErrPermission（包装后可 errors.Is）。
 	ReadFile(path string) ([]byte, error)
 	// ListDir 列出目录下的条目名（不递归）；目录不存在返回 ErrNotExist。
@@ -74,6 +76,32 @@ func (h OSHost) Run(ctx context.Context, name string, args ...string) (string, e
 	}
 	if err != nil {
 		return text, fmt.Errorf("执行 %s: %w（stderr: %s）", name, err, truncate(strings.TrimSpace(stderr.String()), 200))
+	}
+	return text, nil
+}
+
+// RunInput 执行命令并把 stdin 交给子进程；stderr 只进错误文案，避免大输出撑爆内存。
+func (h OSHost) RunInput(ctx context.Context, name string, args []string, stdin string) (string, error) {
+	timeout := h.Timeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.WaitDelay = time.Second
+	err := cmd.Run()
+	text := stdout.String()
+	if len(text) > maxCommandOutput {
+		text = text[:maxCommandOutput]
+	}
+	if err != nil {
+		return text, fmt.Errorf("执行 %s: %w（stderr: %s）", name, err, truncate(strings.TrimSpace(stderr.String()), 500))
 	}
 	return text, nil
 }

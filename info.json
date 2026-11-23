@@ -1,17 +1,35 @@
 {
   "id": "dns",
   "name": "DNS 区域 / 记录管理插件",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "protocol": "kore.plugin.v1",
   "lifecycle": "lazy",
   "depth_level": "basic",
   "entry": "bin/dns",
-  "capabilities": ["system:read"],
+  "capabilities": [
+    "system:read"
+  ],
+  "method_capabilities": {
+    "dns.status": "system:read",
+    "dns.zones": "system:read",
+    "dns.records": "system:read",
+    "dns.query": "system:read",
+    "dns.record.add": "system:admin",
+    "dns.record.update": "system:admin",
+    "dns.record.delete": "system:admin"
+  },
   "triggers": [],
   "requires_kore": ">=0.1.0 <0.2.0",
-  "resources": {"memory_mb": 6, "cpu_quota": "20%", "pids_max": 32},
+  "resources": {
+    "memory_mb": 6,
+    "cpu_quota": "20%",
+    "pids_max": 32
+  },
   "depends_on": [],
   "conflicts": [],
-  "scenario_tags": ["ops", "web"],
-  "size_bytes": 1571089
+  "scenario_tags": [
+    "ops",
+    "web"
+  ],
+  "size_bytes": 1638778
 }

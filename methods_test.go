@@ -74,11 +74,13 @@ func TestConfigGet(t *testing.T) {
 		if err := json.Unmarshal(response.Result, &result); err != nil {
 			t.Fatalf("解析 config.get 失败: %v", err)
 		}
-		if len(result.Schema.Fields) != 6 {
-			t.Fatalf("字段数=%d，期望 6", len(result.Schema.Fields))
+		if len(result.Schema.Fields) != 10 {
+			t.Fatalf("字段数=%d，期望 10（4 只读路径 + engine + query 超时 + 4 写入项）", len(result.Schema.Fields))
 		}
 		for _, field := range result.Schema.Fields {
-			if field.Key == "" || field.Type == "" || len(field.Default) == 0 || !field.Required || field.Help == "" {
+			// update_key_file 是写通道的开关：留空表示不启用写入，因此允许 non-required。
+			required := field.Required || field.Key == "update_key_file"
+			if field.Key == "" || field.Type == "" || len(field.Default) == 0 || !required || field.Help == "" {
 				t.Fatalf("字段描述不完整: %+v", field)
 			}
 		}
@@ -188,11 +190,16 @@ func TestReloadDigest(t *testing.T) {
 // TestUnknownMethod 未知方法（含旧骨架方法 zone.list）统一 E_NOTFOUND。
 func TestUnknownMethod(t *testing.T) {
 	cfg := testConfig(t)
-	for _, method := range []string{"dns.zone.list", "dns.record.add", "dns.nope", "zone.list"} {
+	for _, method := range []string{"dns.zone.list", "dns.record.rename", "dns.nope", "zone.list"} {
 		response := invoke(t, cfg, method, "r-404", nil)
 		if response.Error == nil || response.Error.Code != pluginapi.E_NOTFOUND {
 			t.Fatalf("%s 期望 E_NOTFOUND，实际 %v", method, response.Error)
 		}
+	}
+	// record.add 已是真实写入方法：缺参数应回 E_INVALID（参数错误），不是 E_NOTFOUND。
+	missing := invoke(t, cfg, "dns.record.add", "r-param", nil)
+	if missing.Error == nil || missing.Error.Code != pluginapi.E_INVALID {
+		t.Fatalf("record.add 缺参应 E_INVALID，实际 %v", missing.Error)
 	}
 }
 

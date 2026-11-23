@@ -87,6 +87,48 @@ func AllowedReadRoots() []string {
 	return out
 }
 
+// writeKeyRoots 是 TSIG 密钥允许所在的白名单：只读白名单 + kore 自有目录。
+// nsupdate 以插件自身用户读密钥，因此这里约束的是"允许让插件去读哪里的密钥文件"。
+var writeKeyRoots = []string{"/etc/bind", "/etc/dnsmasq.d", "/var/lib/bind", "/etc/dnsmasq.conf", "/var/lib/kore"}
+
+// AllowedWriteKeyRoots 返回 TSIG 密钥白名单根（文档与 config.get 帮助文案共用）。
+func AllowedWriteKeyRoots() []string {
+	out := make([]string, len(writeKeyRoots))
+	copy(out, writeKeyRoots)
+	return out
+}
+
+// ValidateWriteKeyPath 校验 update_key_file：绝对路径、已 Clean、无 ..、落在密钥白名单内。
+func ValidateWriteKeyPath(path string) (string, *pluginapi.Error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", invalidParam("update_key_file 不能为空（留空表示不启用写入）")
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		return "", invalidParam("update_key_file 必须是绝对路径")
+	}
+	cleaned := cleanPath(trimmed)
+	if strings.Contains(cleaned, "..") {
+		return "", invalidParam("update_key_file 不允许包含 ..")
+	}
+	allowed := false
+	for _, root := range writeKeyRoots {
+		if cleaned == root || strings.HasPrefix(cleaned, root+"/") {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return "", invalidParam("update_key_file 不在白名单内（允许：" + strings.Join(writeKeyRoots, "、") + "）")
+	}
+	return cleaned, nil
+}
+
+// validateWriteKeyPath 是内部别名（recordwrite.go 用）。
+func validateWriteKeyPath(path string) (string, *pluginapi.Error) {
+	return ValidateWriteKeyPath(path)
+}
+
 // WithinReadRoots 判断绝对路径是否落在只读白名单内（路径必须已 Clean，且不允许 .. 逃逸）。
 func WithinReadRoots(path string) bool {
 	if path == "" || !strings.HasPrefix(path, "/") {
