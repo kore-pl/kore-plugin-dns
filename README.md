@@ -8,7 +8,7 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 - **不内置 DNS 服务**：插件只检测、只读取、只查询宿主已有服务，不安装、不启停、不写任何宿主配置。
 - **可写但不需要 root**：`record.add` / `record.update` / `record.delete` 走 bind9 的 **RFC 2136 动态更新**（固定 argv 的 `nsupdate -k <TSIG>`，脚本走 stdin），以插件自身用户执行；不写宿主配置文件、不 reload 服务、不经 `root_actions`（因此本版**没有** `requires_root` / `root_actions` 声明）。插件永不提权，也绝不 `exec sudo`。
 - 协议：`kore.plugin.v1`，`lifecycle = lazy`，唯一外部依赖 `github.com/pengtang1024/kore/pkg/pluginapi v0.1.1`（其余为标准库）。
-- 能力声明保持 `system:read`（插件自身只需读文件/只读命令；动态更新用插件用户的 TSIG 密钥，不需要宿主特权）。方法级 `method_capabilities` 把**调用方**要求下沉：4 个只读方法 `system:read`，3 个写方法 `system:admin`。
+- 能力声明保持 `system:read`（插件自身只需读文件/只读命令；动态更新用插件用户的 TSIG 密钥，不需要宿主特权）。方法级 `method_capabilities` 把**调用方**要求下沉：4 个只读方法（`status` / `zones` / `records` / `query`）`system:read`，7 个写方法（`record.add/update/delete`、`addRecord/updateRecord/deleteRecord`、`reload`）`system:admin`。
 
 ## 方法表
 
@@ -21,6 +21,8 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 | `dns.record.add` / `record.add` | 新增记录 `{zone, name, type, value, ttl?}`：快照 → 原子动态更新 → 直连权威查询校验 → 未生效自动回滚；同值幂等、异值 `E_CONFLICT` |
 | `dns.record.update` / `record.update` | 改记录 `{zone, name, type, value, old_value?, ttl?}`：同一条 UPDATE 消息内先删后加（原子），可带旧值前置条件 |
 | `dns.record.delete` / `record.delete` | 删记录 `{zone, name, type, value?}`：省略 value 删除该 name/type 全部值；不存在时幂等 |
+| `dns.addRecord` / `updateRecord` / `deleteRecord` | 0.4.0 兼容写入口 `{zone, name, type, ttl?, value, old_value?}`：按引擎分派——bind9 走 RFC 2136（同 `record.*` 通道），dnsmasq 写插件状态目录内的 hosts 片段（只支持 `A`/`AAAA`/`CNAME`，其余类型 `E_UNSUPPORTED`），systemd-resolved / CoreDNS 不支持 |
+| `dns.reload` | `{zone?}` → bind9 执行 `rndc reload [zone]`，返回 `{engine, reloaded, reload_required, command?, hint}`；拿不到 rndc 权限时 `E_NEED_ROOT` + hint；dnsmasq 返回 `reload_required=true`（插件不启停宿主服务） |
 | `dns.config.get` / `dns.config.set` | 配置契约（引擎、四个只读路径、查询超时），0600 原子落盘、保存即生效 |
 | `kore.ping` / `kore.reload` / `kore.shutdown` | 协议必选方法；`kore.reload` 重读配置并返回 `config_digest` |
 
@@ -51,7 +53,7 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 
 ## 记录写入（bind9 动态更新）
 
-写路径**只支持 bind9**（本仓既有探测已识别它），机制是 RFC 2136 动态更新 ——
+`dns.record.add` / `record.update` / `record.delete` 的写路径**只支持 bind9**，机制是 RFC 2136 动态更新 ——
 不重写 zone 文件、不改 `named.conf`、不 reload 服务：
 
 1. **前置条件**（部署侧一次性配置，插件不替用户改）：
@@ -63,7 +65,20 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 4. **生效判定**：`applied` = 服务器接受且校验通过；`verified` = 直连权威查询确认；`reload_required` 恒为 `false`。`changed=false` 是幂等空操作（未下发任何更新）。
 5. **降级（不静默）**：非 bind9 区域 → `E_UNSUPPORTED` + hint；区域不在 `bind_conf` 中（或不可读）→ `E_NOTFOUND` + hint；未配置 `update_key_file` → `E_UNSUPPORTED` + 如何生成密钥；缺 `nsupdate` / `dig` → `E_UPSTREAM`；服务器拒绝 → `E_UPSTREAM` + `nsupdate_output` + 按 REFUSED/NOTAUTH/NOTZONE/连接失败分类的 hint；校验失败 → 自动回滚并在 `detail.rolled_back` 披露结果。
 6. **安全边界**：`nsupdate` argv 固定（只有 `-k` 密钥与 `-p` 端口），zone/name/type/value 全部进 stdin 脚本且逐类型校验（拒绝换行/控制字符，非 TXT 拒绝 `;`）；`name` 必须在 `zone` 内；可写类型仅 `A/AAAA/CNAME/MX/TXT/SRV`（NS/SOA/PTR 等区域结构不开放）。
-7. **不支持**：新建 zone（要改 `named.conf`，属 root 配置面）、dnsmasq / systemd-resolved / CoreDNS 写入、`$INCLUDE` 展开与 zone 文件编辑。
+7. **不支持**：新建 zone（要改 `named.conf`，属 root 配置面）、systemd-resolved / CoreDNS 写入、`$INCLUDE` 展开与 zone 文件编辑。
+
+### 兼容写入口与 reload（0.4.0）
+
+`dns.addRecord` / `dns.updateRecord` / `dns.deleteRecord` 是同一套写入能力的兼容入口，入参与
+`record.*` 同源（`old_value` 是旧值前置条件），差别在**按引擎分派**：
+
+- **bind9** → RFC 2136 动态更新，链路同上一节（快照 → journal → 下发 → 校验 → 失败回滚）。
+- **dnsmasq** → 只写插件状态目录里的 hosts 片段 `<KORE_STATE_DIR>/dnsmasq/hosts.conf`，**不写 `/etc/dnsmasq.d`**（零侵入），
+  支持 `A` / `AAAA` / `CNAME`；`MX` / `TXT` / `SRV` 返回 `E_UNSUPPORTED` 并给替代方案。
+- 重复新增 / 重复删除是幂等空操作（`changed=false, applied=true`）；非 root 且未配 TSIG 密钥 → `E_NEED_ROOT` + hint。
+
+`dns.reload` 与 `kore.reload` 不同：`kore.reload` 只重读插件配置，`dns.reload` 会让 **bind9 重新加载区域**（`rndc reload [zone]`）。
+动态更新本身立即生效、不需要 reload，这个方法是给手工改过 zone 文件或想看服务端确认的场景用的。
 
 ### 路径白名单（只读）
 
