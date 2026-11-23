@@ -20,6 +20,12 @@
 
 - 契约未变（仍是 `{zone?}`），不涉及 kore 协议/schema 变更 → 无 ADR、无主版本递增；仅插件行为修复 → patch。
 
+## 0.4.2 — 2026-11-24
+
+### 变更
+
+- **`depth_level`：`production` → `basic`**。依据 `kore/docs/PLUGIN-CATALOG.md` §6.1 升级判据①（边界用例：异常输入 / 并发 / 权限不足 / 资源耗尽各 ≥1 例并进 CI）**不满足**——本仓无 `tests/boundary/`，`grep -rn "t.Parallel" tests/` 命中 0。故障注入（判据②）已通过，但两条须同时满足；此前声明 `production` 属**过度声明**，索引的 `basic` 才是正确值。**非降级缺陷**，不涉及代码、能力与方法契约变化；补齐边界用例后再升 production。
+
 ## 0.4.0 — 2026-11-23
 
 ### 新增
