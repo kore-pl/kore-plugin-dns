@@ -1,8 +1,10 @@
 package dnsop
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/pengtang1024/kore/pkg/pluginapi"
@@ -17,6 +19,13 @@ func Methods() []string {
 // statusParams 是 dns.status / dns.zones 的入参：engine 可选，用于强制/过滤引擎。
 type statusParams struct {
 	Engine string `json:"engine"`
+}
+
+// reloadParams 是 dns.reload 的入参：只有一个可选的 zone。
+// 契约以 README 方法表为准（`{zone?}` → `rndc reload [zone]`）；engine 不是本方法入参——
+// reload 用哪个引擎由插件配置/探测决定（见 writableEngine）。
+type reloadParams struct {
+	Zone string `json:"zone"`
 }
 
 // recordsParams 是 dns.records 的入参。
@@ -113,11 +122,11 @@ func (d Detector) Call(ctx context.Context, method string, params json.RawMessag
 		}
 		return encodeResult("dns.deleteRecord", result)
 	case "reload":
-		var p statusParams
-		if perr := decodeParams(params, &p); perr != nil {
+		p, perr := decodeReloadParams(params)
+		if perr != nil {
 			return nil, perr
 		}
-		result, perr := d.Reload(ctx, p.Engine)
+		result, perr := d.Reload(ctx, p.Zone)
 		if perr != nil {
 			return nil, perr
 		}
@@ -143,6 +152,54 @@ func validateEngineParam(engine string) *pluginapi.Error {
 	default:
 		return invalidParam("engine 不支持 " + engine + "：仅允许 auto/systemd-resolved/dnsmasq/bind9/coredns")
 	}
+}
+
+// decodeReloadParams 解析 dns.reload 的入参：只接受可选 zone，未声明字段 fail-closed。
+//
+// 历史缺陷（3b538e6 发现）：reload 曾复用 statusParams 并把 p.Engine 当 zone 传下去，
+// 于是 {"engine":"bind9"} 实际执行 `rndc reload bind9`。这里对未声明字段直接 E_INVALID，
+// 字段名写错时不再静默落到别的参数上。
+func decodeReloadParams(raw json.RawMessage) (reloadParams, *pluginapi.Error) {
+	var p reloadParams
+	if len(raw) == 0 || string(raw) == "null" {
+		return p, nil
+	}
+	if raw[0] != '{' {
+		return p, invalidParam("params 必须是 JSON 对象")
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		if field, ok := unknownJSONField(err); ok {
+			return p, &pluginapi.Error{
+				Code:    pluginapi.E_INVALID,
+				Message: "params 含未声明的字段 " + field + "：dns.reload 只接受可选 zone（引擎由插件配置/探测决定）",
+				Detail: encodeDetail(map[string]string{
+					"field":   field,
+					"allowed": "zone",
+					"hint":    "重载整个引擎省略 zone；只重载某个区域写 {\"zone\":\"example.com\"}。要指定引擎请改插件配置 engine 后调用。",
+				}),
+			}
+		}
+		return p, invalidParam("params 解析失败: " + err.Error())
+	}
+	return p, nil
+}
+
+// unknownJSONField 从 encoding/json 的 unknown field 错误里取出字段名。
+func unknownJSONField(err error) (string, bool) {
+	const marker = `unknown field "`
+	msg := err.Error()
+	index := strings.Index(msg, marker)
+	if index < 0 {
+		return "", false
+	}
+	rest := msg[index+len(marker):]
+	end := strings.IndexByte(rest, '"')
+	if end <= 0 {
+		return "", false
+	}
+	return rest[:end], true
 }
 
 // decodeParams 把 params 解析到目标结构；空 / null 视为空对象，非对象报 E_INVALID。

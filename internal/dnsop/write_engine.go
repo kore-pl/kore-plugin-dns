@@ -373,6 +373,9 @@ func writeFragmentLines(path string, lines []string) *pluginapi.Error {
 
 // Reload 让服务重新加载：bind9 走 rndc reload（需要本机 rndc.key，非 root 通常拿不到 →
 // E_NEED_ROOT + hint）；dnsmasq 返回「需要重启」的提示，插件绝不启停宿主服务。
+//
+// zone 是 dns.reload 唯一合法入参（可选，见 call.go 的 reloadParams）：为空表示重载整个引擎，
+// 非空表示只重载该区域。用哪个引擎由 writableEngine 按配置/探测决定，调用方不能传入 engine。
 func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *pluginapi.Error) {
 	engine, perr := d.writableEngine(ctx)
 	if perr != nil {
@@ -388,20 +391,25 @@ func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *plugi
 		if zone != "" {
 			argv = append(argv, zone)
 		}
+		// 空 zone 是「重载整个引擎」，命令与 hint 都不应留下尾随空格。
+		command := strings.TrimSpace("rndc reload " + zone)
 		out, err := d.Host.Run(ctx, "rndc", argv...)
 		if err != nil {
 			detail := map[string]string{
-				"hint": "rndc 需要与 named 匹配的 rndc.key（通常 root 可读）。改用 sudo rndc reload " + zone +
+				"hint": "rndc 需要与 named 匹配的 rndc.key（通常 root 可读）。改用 sudo " + command +
 					" 或 sudo systemctl reload named 后重试；动态更新本身不需要 reload（立即生效）。",
-				"command": "rndc reload " + zone, "error": truncate(err.Error(), 500),
+				"command": command, "error": truncate(err.Error(), 500),
 			}
 			if snippet := strings.TrimSpace(strings.Join(strings.Fields(out), " ")); snippet != "" {
 				detail["output"] = truncate(snippet, 1000)
 			}
 			return ReloadResult{}, &pluginapi.Error{Code: CodeNeedRoot, Message: "E_NEED_ROOT: rndc 无法重载区域", Detail: encodeDetail(detail)}
 		}
-		return ReloadResult{Engine: engine, Reloaded: true, Command: "rndc reload " + zone,
-			Hint: "区域已重新加载。"}, nil
+		hint := "区域已重新加载。"
+		if zone == "" {
+			hint = "全部区域已重新加载。"
+		}
+		return ReloadResult{Engine: engine, Reloaded: true, Command: command, Hint: hint}, nil
 	case EngineDnsmasq:
 		return ReloadResult{Engine: engine, ReloadRequired: true,
 			Hint: "dnsmasq 没有安全的在线重载通道：请执行 sudo systemctl restart dnsmasq（插件不启停宿主服务）。"}, nil

@@ -1,3 +1,25 @@
+## 0.4.1 — 2026-11-24
+
+### 修复
+
+- **`dns.reload` 把 `engine` 入参当成 `zone` 传给 `rndc`**（3b538e6 发现）：`call.go` 曾复用 `statusParams`
+  并执行 `d.Reload(ctx, p.Engine)`，于是 `{"engine":"bind9"}` 实际执行 `rndc reload bind9`（把引擎名当区域名，
+  必然失败且错误信息误导去查 zone）；同时声明的 `{"zone":"example.com"}` 反而被忽略。
+  现在按 README 契约 `{zone?}` 解析并下传 `zone`，省略 zone 时执行 `rndc reload`（重载整个引擎）。
+- 入参严格校验：`dns.reload` 的未声明字段（含 `engine`）→ `E_INVALID` + `detail.allowed=zone`，
+  拒绝发生在执行之前（不再有「静默落到别的参数」的路径）。`zone` 非法同样 `E_INVALID` 且不执行 `rndc`。
+- `ReloadResult.command` 在「重载整个引擎」时不再带尾随空格（`rndc reload`）。
+
+### 测试
+
+- 新增 `internal/dnsop/call_test.go`：断言 `{"zone":"Example.COM."}` → `rndc reload example.com`、
+  **`{"engine":"bind9"}` 不产生 `rndc reload bind9` 且不触发任何 `rndc`**、空/`{}`/`null` → `rndc reload`、
+  非法 zone 与非对象 params → `E_INVALID` 不执行。
+
+### 判定
+
+- 契约未变（仍是 `{zone?}`），不涉及 kore 协议/schema 变更 → 无 ADR、无主版本递增；仅插件行为修复 → patch。
+
 ## 0.4.0 — 2026-11-23
 
 ### 新增

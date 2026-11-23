@@ -22,7 +22,7 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 | `dns.record.update` / `record.update` | 改记录 `{zone, name, type, value, old_value?, ttl?}`：同一条 UPDATE 消息内先删后加（原子），可带旧值前置条件 |
 | `dns.record.delete` / `record.delete` | 删记录 `{zone, name, type, value?}`：省略 value 删除该 name/type 全部值；不存在时幂等 |
 | `dns.addRecord` / `updateRecord` / `deleteRecord` | 0.4.0 兼容写入口 `{zone, name, type, ttl?, value, old_value?}`：按引擎分派——bind9 走 RFC 2136（同 `record.*` 通道），dnsmasq 写插件状态目录内的 hosts 片段（只支持 `A`/`AAAA`/`CNAME`，其余类型 `E_UNSUPPORTED`），systemd-resolved / CoreDNS 不支持 |
-| `dns.reload` | `{zone?}` → bind9 执行 `rndc reload [zone]`，返回 `{engine, reloaded, reload_required, command?, hint}`；拿不到 rndc 权限时 `E_NEED_ROOT` + hint；dnsmasq 返回 `reload_required=true`（插件不启停宿主服务） |
+| `dns.reload` | `{zone?}` → bind9 执行 `rndc reload [zone]`（省略 zone = 重载整个引擎），返回 `{engine, reloaded, reload_required, command?, hint}`；**不接受 `engine`**（引擎由配置/探测决定，未声明字段 → `E_INVALID`）；拿不到 rndc 权限时 `E_NEED_ROOT` + hint；dnsmasq 返回 `reload_required=true`（插件不启停宿主服务） |
 | `dns.config.get` / `dns.config.set` | 配置契约（引擎、四个只读路径、查询超时），0600 原子落盘、保存即生效 |
 | `kore.ping` / `kore.reload` / `kore.shutdown` | 协议必选方法；`kore.reload` 重读配置并返回 `config_digest` |
 
@@ -50,6 +50,7 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 | 未知区域 | `E_NOTFOUND` + `detail.hint`（列出可用区域） |
 | `dig` / `nslookup` 都缺失 | `dns.query` 回退 Go 解析器，`resolver="go"` + `note` 说明精度下降 |
 | 三级查询全部失败 | `E_UPSTREAM` + `detail.attempts`（逐条失败原因） |
+| `dns.reload` 传了未声明的入参（如 `engine`） | `E_INVALID` + `detail.allowed=zone`；被拒入参不会被执行（不再把 engine 当 zone 传给 `rndc`） |
 
 ## 记录写入（bind9 动态更新）
 
@@ -79,6 +80,10 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 
 `dns.reload` 与 `kore.reload` 不同：`kore.reload` 只重读插件配置，`dns.reload` 会让 **bind9 重新加载区域**（`rndc reload [zone]`）。
 动态更新本身立即生效、不需要 reload，这个方法是给手工改过 zone 文件或想看服务端确认的场景用的。
+
+入参契约只有可选的 `zone`：省略表示重载整个引擎，写了表示只重载该区域。**`engine` 不是 `dns.reload` 的入参**——
+用哪个引擎由插件配置（`engine`）与宿主探测决定；传 `engine` 等未声明字段返回 `E_INVALID`，不会被执行，
+也不会被当成 zone（0.4.0 的 `{"engine":"bind9"}` → `rndc reload bind9` 缺陷在 0.4.1 修复）。
 
 ### 路径白名单（只读）
 
