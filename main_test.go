@@ -160,7 +160,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.source != plugincfg.SourceDefault {
 		t.Fatalf("source=%q，期望 default", cfg.source)
 	}
-	if cfg.id != "dns" || cfg.version != "0.3.0" {
+	if cfg.id != "dns" || cfg.version != "0.3.1" {
 		t.Fatalf("id/version=%q/%q", cfg.id, cfg.version)
 	}
 	if err := plugincfg.ValidateSchema(configSchema()); err != nil {

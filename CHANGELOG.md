@@ -2,6 +2,12 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.3.1] - 2026-11-23
+
+### Changed
+
+- 提升为 `production` 深度等级（故障注入测试已覆盖）
+
 ## [0.3.0] - 2026-11-23
 
 从「引擎无关只读」升级为**可写**：新增 bind9 记录写入（RFC 2136 动态更新），不需要 root、不需要 reload 服务。
