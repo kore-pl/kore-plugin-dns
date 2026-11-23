@@ -1,3 +1,20 @@
+## 0.4.0 — 2026-11-23
+
+### 新增
+
+- `dns.addRecord` / `dns.updateRecord` / `dns.deleteRecord`：记录写入（入参 `{zone,name,type,ttl,value,previous?}`）。
+  按引擎分派：**bind9** 走 RFC2136 动态更新（`nsupdate` + TSIG 密钥，插件自身权限、不经 root、写前快照+写后校验+失败回滚）；
+  **dnsmasq** 只写插件状态目录内的 hosts 片段（`<KORE_STATE_DIR>/dnsmasq/hosts.conf`，**不写 `/etc/dnsmasq.d`**，零侵入），
+  支持 A/AAAA/CNAME，MX/TXT/SRV 返回 `E_UNSUPPORTED` 并给替代方案；systemd-resolved / CoreDNS → `E_UNSUPPORTED`。
+  非 root 且未配 TSIG 密钥 → `E_NEED_ROOT` + hint（不回 401）；重复删除/重复新增为幂等空操作（`changed=false, applied=true`）。
+- `dns.reload`：bind9 执行 `rndc reload [zone]`（拿不到 rndc 权限时 `E_NEED_ROOT` + hint）；dnsmasq 返回
+  `reload_required=true` + 重启提示（插件不启停宿主服务）。
+
+### 变更
+
+- `capabilities` 增加 `system:admin`（写方法需要）；`method_capabilities` 新增 4 条 admin 声明，读方法保持 `system:read`。
+- 不做：zone 文件整体编辑、TSIG 密钥生成、写 `/etc/dnsmasq.d`。需要用户提供：bind9 侧 `allow-update`/`update-policy` 与 TSIG 密钥文件路径（插件设置 `update_key_file`）。
+
 # Changelog
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。

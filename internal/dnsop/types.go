@@ -272,6 +272,9 @@ type WriteOptions struct {
 	KeyFile string
 	// Timeout 是单次更新/校验查询的超时。
 	Timeout time.Duration
+	// FragmentDir 是 dnsmasq 写入通道的状态目录（插件 state 内，绝不在 /etc 下）。
+	// 空表示 dnsmasq 写入未启用（缺 KORE_STATE_DIR）。
+	FragmentDir string
 	// Journal 是写操作审计与回滚依据。
 	Journal Journal
 }

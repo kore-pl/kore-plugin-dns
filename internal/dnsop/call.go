@@ -11,7 +11,7 @@ import (
 // Methods 返回 DNS 业务方法名（不含 config.* 与 kore.* 协议方法）。
 // 前四个只读；后三个是 bind9 动态更新写入（RFC 2136，无需 root）。
 func Methods() []string {
-	return []string{"status", "zones", "records", "query", "record.add", "record.update", "record.delete"}
+	return []string{"status", "zones", "records", "query", "record.add", "record.update", "record.delete", "addRecord", "updateRecord", "deleteRecord", "reload"}
 }
 
 // statusParams 是 dns.status / dns.zones 的入参：engine 可选，用于强制/过滤引擎。
@@ -94,6 +94,34 @@ func (d Detector) Call(ctx context.Context, method string, params json.RawMessag
 			return nil, perr
 		}
 		return encodeResult("dns.record.delete", result)
+	case "addRecord":
+		result, perr := d.WriteRecord(ctx, "add", params)
+		if perr != nil {
+			return nil, perr
+		}
+		return encodeResult("dns.addRecord", result)
+	case "updateRecord":
+		result, perr := d.WriteRecord(ctx, "update", params)
+		if perr != nil {
+			return nil, perr
+		}
+		return encodeResult("dns.updateRecord", result)
+	case "deleteRecord":
+		result, perr := d.WriteRecord(ctx, "delete", params)
+		if perr != nil {
+			return nil, perr
+		}
+		return encodeResult("dns.deleteRecord", result)
+	case "reload":
+		var p statusParams
+		if perr := decodeParams(params, &p); perr != nil {
+			return nil, perr
+		}
+		result, perr := d.Reload(ctx, p.Engine)
+		if perr != nil {
+			return nil, perr
+		}
+		return encodeResult("dns.reload", result)
 	default:
 		return nil, &pluginapi.Error{Code: pluginapi.E_NOTFOUND, Message: "未知 DNS 方法：" + method}
 	}

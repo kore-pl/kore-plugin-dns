@@ -494,6 +494,10 @@ func (c *config) writeOptions() dnsop.WriteOptions {
 	if dir := c.journalDir(); dir != "" {
 		options.Journal = dnsop.FileJournal{Dir: dir}
 	}
+	// dnsmasq 写入只落插件状态目录内的片段（ADR-0023 零侵入），缺 KORE_STATE_DIR 时为空。
+	if dir := strings.TrimSpace(c.stateDir); dir != "" {
+		options.FragmentDir = filepath.Join(dir, "dnsmasq")
+	}
 	return options
 }
 
