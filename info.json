@@ -1,7 +1,7 @@
 {
   "id": "dns",
   "name": "DNS 区域 / 记录管理插件",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "protocol": "kore.plugin.v1",
   "lifecycle": "lazy",
   "depth_level": "production",
@@ -31,5 +31,5 @@
     "ops",
     "web"
   ],
-  "size_bytes": 1638778
+  "size_bytes": 1638783
 }

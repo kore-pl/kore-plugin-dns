@@ -2,6 +2,14 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本。
 
+## [0.3.2] - 2026-11-23
+
+### Changed
+
+- 测试解耦版本号：`main_test.go` 不再硬编码发布版本字面量，改为断言 `version` 符合
+  MAJOR.MINOR.PATCH 且内嵌清单、`info.json`、`manifest.json` 三处同步（Gitea dns#1 技术债），
+  此后 bump 无需改测试；本次 bump 仅版本号变化，方法契约与行为不变。
+
 ## [0.3.1] - 2026-11-23
 
 ### Changed
