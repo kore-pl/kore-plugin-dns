@@ -290,7 +290,7 @@ func TestRecordsUnknownZoneFailsExplicitly(t *testing.T) {
 
 // TestRecordUpdateDeleteFailClosedWithoutBindZone 把 TestWriteWithoutBindZone 的手法复用到
 // record.update / record.delete：无 bind9 区域声明时必须 E_NOTFOUND（不是 500，也不是 applied=true），
-// hint 指向 bind_conf，并且整个失败路径在 journal 之前就终止——状态目录字节零变化。
+// hint 指向配置里的区域声明文件，并且整个失败路径在 journal 之前就终止——状态目录字节零变化。
 func TestRecordUpdateDeleteFailClosedWithoutBindZone(t *testing.T) {
 	binary := findBinary(t)
 	cmd, conn, stateDir := startWithState(t, binary, "KORE_DNS_ENGINE=bind9")
@@ -310,7 +310,7 @@ func TestRecordUpdateDeleteFailClosedWithoutBindZone(t *testing.T) {
 	for index, item := range cases {
 		response := call(t, conn, fmt.Sprintf("wu-%d", index), item.method, item.params)
 		detail := requireCode(t, response, item.method, "E_NOTFOUND")
-		requireHintContains(t, detail, "bind_conf")
+		requireHintContains(t, detail, missingBindConf)
 	}
 
 	requireJournalAbsent(t, stateDir)
@@ -350,11 +350,11 @@ func TestLegacyWriteAliasesMirrorRecordMethods(t *testing.T) {
 	for index, pair := range pairs {
 		legacy := call(t, conn, fmt.Sprintf("al-%d", index), pair.legacy, pair.params)
 		legacyDetail := requireCode(t, legacy, pair.legacy, "E_NOTFOUND")
-		legacyHint := requireHintContains(t, legacyDetail, "bind_conf")
+		legacyHint := requireHintContains(t, legacyDetail, missingBindConf)
 
 		canonical := call(t, conn, fmt.Sprintf("ac-%d", index), pair.canonical, pair.params)
 		canonicalDetail := requireCode(t, canonical, pair.canonical, "E_NOTFOUND")
-		canonicalHint := requireHintContains(t, canonicalDetail, "bind_conf")
+		canonicalHint := requireHintContains(t, canonicalDetail, missingBindConf)
 
 		if legacyHint != canonicalHint {
 			t.Fatalf("%s 与 %s 的 hint 不一致（别名语义分叉）：%q vs %q",

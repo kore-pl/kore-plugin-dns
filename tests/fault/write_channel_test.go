@@ -38,8 +38,10 @@ func TestWriteWithoutBindZone(t *testing.T) {
 	if err := json.Unmarshal(response.Error.Detail, &detail); err != nil || detail["hint"] == "" {
 		t.Fatalf("降级必须带可操作 hint: err=%v detail=%s", err, response.Error.Detail)
 	}
-	if !strings.Contains(detail["hint"], "bind_conf") {
-		t.Fatalf("hint 应指向 bind_conf 配置: %q", detail["hint"])
+	// 0.5.1 起 hint 不再出现内部配置键「bind_conf」，而是直接给配置里的实际路径（更强断言：
+	// 硬编码别的路径或退回一句话都会失败）。
+	if !strings.Contains(detail["hint"], missingBindConf) {
+		t.Fatalf("hint 应指向配置里的区域声明文件 %s: %q", missingBindConf, detail["hint"])
 	}
 
 	// fail-closed：没有进入写动作，不应产生 journal 目录。
