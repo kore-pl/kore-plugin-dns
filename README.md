@@ -6,7 +6,7 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 
 - **引擎无关**：同一套结果形状覆盖 `systemd-resolved` / `dnsmasq` / `bind9` / `coredns`，UI 不需要按引擎分支。
 - **不内置 DNS 服务**：插件只检测、只读取、只查询宿主已有服务，不安装、不启停、不写任何宿主配置。
-- **可写但不需要 root**：`record.add` / `record.update` / `record.delete` 走 bind9 的 **RFC 2136 动态更新**（固定 argv 的 `nsupdate -k <TSIG>`，脚本走 stdin），以插件自身用户执行；不写宿主配置文件、不 reload 服务、不经 `root_actions`。插件永不提权，也绝不 `exec sudo`。
+- **可写但不需要 root**：`record.add` / `record.update` / `record.delete` 走 bind9 的 **RFC 2136 动态更新**（固定 argv 的 `nsupdate -k <TSIG>`，脚本走 stdin），以插件自身用户执行；不写宿主配置文件、**记录变更不需要 reload**（立即生效）、不经 `root_actions`。`dns.reload` 只用于手工改过 zone 文件或 `named.conf` 之后的重新加载。插件永不提权，也绝不 `exec sudo`。
 - **唯一的 root 动作（0.5.0）**：`resolved-flush-caches` → `/usr/bin/resolvectl flush-caches`，由内核以 uid=0 执行，供 `dns.reload` 在 systemd-resolved 引擎下刷新缓存。`requires_root: true` 只声明这一条；bind9 的 `rndc` / zone 写入**没有**声明（理由见下文「root_actions 边界」）。
 - 协议：`kore.plugin.v1`，`lifecycle = lazy`，唯一外部依赖 `github.com/pengtang1024/kore/pkg/pluginapi v0.1.3`（其余为标准库）。
 - 能力声明保持 `system:read`（插件自身只需读文件/只读命令；动态更新用插件用户的 TSIG 密钥，不需要宿主特权），另声明 `system:admin` 作为提权通道的调用前提。方法级 `method_capabilities` 把**调用方**要求下沉：4 个只读方法（`status` / `zones` / `records` / `query`）`system:read`，7 个写方法（`record.add/update/delete`、`addRecord/updateRecord/deleteRecord`、`reload`）`system:admin`。
@@ -23,7 +23,7 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 | `dns.record.update` / `record.update` | 改记录 `{zone, name, type, value, old_value?, ttl?}`：同一条 UPDATE 消息内先删后加（原子），可带旧值前置条件 |
 | `dns.record.delete` / `record.delete` | 删记录 `{zone, name, type, value?}`：省略 value 删除该 name/type 全部值；不存在时幂等 |
 | `dns.addRecord` / `updateRecord` / `deleteRecord` | 0.4.0 兼容写入口 `{zone, name, type, ttl?, value, old_value?}`：按引擎分派——bind9 走 RFC 2136（同 `record.*` 通道），dnsmasq 写插件状态目录内的 hosts 片段（只支持 `A`/`AAAA`/`CNAME`，其余类型 `E_UNSUPPORTED`），systemd-resolved / CoreDNS 不支持 |
-| `dns.reload` | `{zone?}` → 按引擎：**bind9** 执行 `rndc reload [zone]`（省略 zone = 重载整个引擎）；**systemd-resolved** 经内核提权通道执行 `resolvectl flush-caches`（无区域概念，带 zone → `E_INVALID`）；**dnsmasq** 返回 `reload_required=true`（插件不启停宿主服务）；返回 `{engine, reloaded, reload_required, command?, hint}`；**不接受 `engine`**（引擎由配置/探测决定，未声明字段 → `E_INVALID`）；拿不到 root/提权通道时 `E_NEED_ROOT` + hint |
+| `dns.reload` | **记录变更不需要它**（RFC 2136 动态更新立即生效）；只用于手工改过 zone 文件 / `named.conf` 之后。`{zone?}` → 按引擎：**bind9** 执行 `rndc reload [zone]`（省略 zone = 重载整个引擎）；**systemd-resolved** 经内核提权通道执行 `resolvectl flush-caches`（无区域概念，带 zone → `E_INVALID`）；**dnsmasq** 返回 `reload_required=true`（插件不启停宿主服务）；返回 `{engine, reloaded, reload_required, command?, hint}`；**不接受 `engine`**（引擎由配置/探测决定，未声明字段 → `E_INVALID`）；拿不到 root/提权通道时 `E_NEED_ROOT` + hint |
 | `dns.config.get` / `dns.config.set` | 配置契约（引擎、四个只读路径、查询超时），0600 原子落盘、保存即生效 |
 | `kore.ping` / `kore.reload` / `kore.shutdown` | 协议必选方法；`kore.reload` 重读配置并返回 `config_digest` |
 
@@ -46,9 +46,9 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 | --- | --- |
 | 四种引擎都不在 | `dns.status` → `available=false` + `error_code=E_NO_ENGINE` + 可操作 `hint`（含安装/启动命令），`engines` 仍返回 4 个候选的探测明细 |
 | 强制指定引擎但未检测到 | `available=false` + `E_NO_ENGINE` + 列出可选引擎 |
-| 区域文件存在但当前用户读不到 | `dns.zones` → `readable=false` + `warnings`；`dns.records` → `E_NEED_ROOT` + `detail.hint`（含 `sudo` 指引） |
+| 区域文件存在但当前用户读不到 | `dns.zones` → `readable=false` + `warnings`；`dns.records` → `E_NEED_ROOT` + `detail.hint`（两条自助替代：`chmod 0644`，或放进 `/var/lib/kore/dns` 并 `include`；也可用 `dns.query` 直查） |
 | 区域声明本身读不到 | `dns.zones` → 空列表 + `error_code=E_NEED_ROOT` + `hint`（不是「没有区域」） |
-| 未知区域 | `E_NOTFOUND` + `detail.hint`（列出可用区域） |
+| 未知区域 | `E_NOTFOUND` + `detail.hint`（列出可用区域 + **可直接复制的建 zone 四段命令**，见「新建 zone」） |
 | `dig` / `nslookup` 都缺失 | `dns.query` 回退 Go 解析器，`resolver="go"` + `note` 说明精度下降 |
 | 三级查询全部失败 | `E_UPSTREAM` + `detail.attempts`（逐条失败原因） |
 | `dns.reload` 传了未声明的入参（如 `engine`） | `E_INVALID` + `detail.allowed=zone`；被拒入参不会被执行（不再把 engine 当 zone 传给 `rndc`） |
@@ -69,7 +69,45 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 4. **生效判定**：`applied` = 服务器接受且校验通过；`verified` = 直连权威查询确认；`reload_required` 恒为 `false`。`changed=false` 是幂等空操作（未下发任何更新）。
 5. **降级（不静默）**：非 bind9 区域 → `E_UNSUPPORTED` + hint；区域不在 `bind_conf` 中（或不可读）→ `E_NOTFOUND` + hint；未配置 `update_key_file` → `E_UNSUPPORTED` + 如何生成密钥；缺 `nsupdate` / `dig` → `E_UPSTREAM`；服务器拒绝 → `E_UPSTREAM` + `nsupdate_output` + 按 REFUSED/NOTAUTH/NOTZONE/连接失败分类的 hint；校验失败 → 自动回滚并在 `detail.rolled_back` 披露结果。
 6. **安全边界**：`nsupdate` argv 固定（只有 `-k` 密钥与 `-p` 端口），zone/name/type/value 全部进 stdin 脚本且逐类型校验（拒绝换行/控制字符，非 TXT 拒绝 `;`）；`name` 必须在 `zone` 内；可写类型仅 `A/AAAA/CNAME/MX/TXT/SRV`（NS/SOA/PTR 等区域结构不开放）。
-7. **不支持**：新建 zone（要改 `named.conf`，属 root 配置面）、systemd-resolved / CoreDNS 写入、`$INCLUDE` 展开与 zone 文件编辑；bind9 的 `rndc reload` 经 `root_actions` 执行也**尚不支持**（形状表未开放 `rndc`，见「root_actions 边界」）。
+7. **新建 zone 不在面板里做**（要改 `named.conf`，属一次性系统配置，ADR-0051 裁决 A）：面板不提供「新建 zone」按钮，但 `dns.zones` 为空 / `dns.records` 命中未知 zone 时**会直接给出四段可复制命令**（zone 块含 `allow-update`、区域文件、`named-checkzone`、`rndc reconfig`、`dig` 验证），见下一节「新建 zone」。
+8. **其余不支持**：systemd-resolved / CoreDNS 写入、`$INCLUDE` 展开与 zone 文件编辑；bind9 的 `rndc reload` 经 `root_actions` 执行也**尚不支持**（形状表未开放 `rndc`，见「root_actions 边界」）。
+
+### 新建 zone：面板给命令，用户执行（0.5.1）
+
+ADR-0051 裁决 A：**不扩形状表，v1 面板没有「新建 zone」按钮**。代价明说，但「做不到」不能变成死路——
+
+`dns.zones` 返回空列表、`dns.records` / `record.*` 命中未知 zone 时，`detail.hint` 直接输出下面的四段命令
+（域名、区域文件路径已按本次操作填好，`kore-update` 是 TSIG 密钥名占位，需换成实际名字）：
+
+```bash
+# 1) 声明 zone（写进 /etc/bind/named.conf.local；BIND 9.11 请把 type primary 改成 type master）
+zone "example.com" {
+    type primary;
+    file "/var/lib/bind/example.com.zone";
+    allow-update { key "kore-update"; };
+};
+
+# 1b) 区域文件不存在时先建一个最小可用的（已存在请跳过，不要覆盖）
+sudo test -e /var/lib/bind/example.com.zone || sudo tee /var/lib/bind/example.com.zone >/dev/null <<'ZONE'
+$TTL 300
+@   IN SOA ns.example.com. admin.example.com. (2026112401 3600 600 86400 300)
+@   IN NS  ns.example.com.
+ns  IN A   127.0.0.1
+ZONE
+
+# 2) 校验 zone 语法与文件路径
+sudo named-checkzone example.com /var/lib/bind/example.com.zone
+
+# 3) 让 named 读取新配置（新建 zone 用 reconfig；只改已有 zone 文件时用 rndc reload example.com）
+sudo rndc reconfig
+
+# 4) 验证
+dig @127.0.0.1 example.com SOA +short
+```
+
+- 这些命令**由用户手工执行**：插件不执行、不写宿主文件、不新增 root 动作（`root_action_declaration_test.go` 仍钉住 `rndc` / `named-checkzone` / 写文件动作必须被形状表拒绝）。
+- 建好后记录增删改继续走面板（RFC 2136 动态更新），**不需要再 reload**。
+- 区域文件读不到时还有两条自助替代：`sudo chmod 0644 <zone 文件>`，或把文件放进 `/var/lib/kore/dns` 并在 `named.conf` 中 `include`（该目录已在插件只读白名单内）。
 
 ### 兼容写入口与 reload（0.4.0）
 
@@ -116,13 +154,14 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 
 ### 路径白名单（只读）
 
-插件只读这四个位置，配置里的路径必须落在白名单内（绝对路径、无 `..`、Clean 后前缀匹配）：
+插件只读这五个位置，配置里的路径必须落在白名单内（绝对路径、无 `..`、Clean 后前缀匹配）：
 
 ```
 /etc/bind          # bind9 区域声明与区域文件
 /var/lib/bind      # bind9 区域文件（Debian 系默认 zone 目录）
 /etc/dnsmasq.d     # dnsmasq 片段目录
 /etc/dnsmasq.conf  # dnsmasq 单文件配置（与 /etc/dnsmasq.d 同域，单列）
+/var/lib/kore      # Kore 自有目录：区域文件读不到时的替代落点（0.5.1 起）
 ```
 
 区域文件解析是**纯文本解析**：不展开 `include`、不执行任何脚本、不写回文件；`addn-hosts` 指向的文件同样必须在白名单内，越界只记 warning 并跳过。
@@ -160,7 +199,7 @@ kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.
 
 ```bash
 make build   # CGO_ENABLED=0 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags="-s -w" -o bin/dns .
-make dist    # 产出 dist/dns-0.5.0.tar.gz（info.json + bin/dns + SHA256SUMS）与同名 .sha256
+make dist    # 产出 dist/dns-0.5.1.tar.gz（info.json + bin/dns + SHA256SUMS）与同名 .sha256
 make check   # gofmt → go vet → go test -timeout 200s
 make fault   # 先 build，再跑 tests/fault 的故障注入
 go test ./tests/live/ -v   # 真实主机验收（无 DNS 服务时跳过，不算通过）
@@ -196,6 +235,7 @@ resolv=[127.0.0.53]
 | `internal/dnsop/*_test.go` | 引擎检测（mock 宿主：四种引擎、优先级、强制指定、无引擎降级）、ss 与 `/proc/net` 监听解析、bind `named.conf` zone 块与 forwarders、zone 文件六类记录（owner 继承 / `$TTL` / `$ORIGIN` / 括号续行 / 注释 / 引号 TXT）、dnsmasq 五类指令与 hosts 文件、路径白名单、500 条截断、权限降级（`E_NEED_ROOT`）、dig/nslookup 输出解析与三级回退 |
 | `internal/dnsop/recordwrite_test.go` | 写入主链路（快照 → 原子 UPDATE → 直连校验 → journal 两条）、同值幂等/异值 `E_CONFLICT`、update 沿用快照 TTL、delete 幂等、校验失败自动回滚（逆操作脚本 + `rolled_back`）、类型/名字/值/TTL/注入拒绝、写通道 fail-closed（无 journal / 无密钥 / 密钥不可读 / 缺 nsupdate / 缺 dig）、区域归属（未知 `E_NOTFOUND` / dnsmasq `E_UNSUPPORTED`）、journal 落盘 0600 JSONL |
 | `internal/dnsop/root_reload_test.go` | 提权通道：resolved reload 的 `action_id` + **零追加参数**（防 engine/zone 混入）、带 zone 拒绝且不触碰通道、内核 `E_NEED_ROOT` 映射与 hint、通道缺失降级、非零退出码 `E_UPSTREAM`、声明 argv 过 `ValidateRootAction` |
+| `internal/dnsop/ux_guide_test.go` | 0.5.1 文案：未知 zone / 空列表含四段可复制命令（含反例自证：旧一句话文案与删段文案必须判不合格）、reload 文案必须说明「动态更新不需要 reload」（含反例）、读取降级两条替代 + `/var/lib/kore/dns` 真实可读 |
 | `root_action_declaration_test.go` | 声明 ↔ 代码一一对应（删声明即失败）、SDK 校验逐条通过、`TestBlockedDNSActionsRejectedByPolicy` 钉住 `rndc`/`named-checkzone`/写文件动作必须被形状表拒绝 |
 | `tests/fault/` | `kill -9`、握手超时、状态目录不可写（`config.set` → `E_INTERNAL` 且进程存活）、配置损坏启动即失败（退出码 1 + stderr 明因）、`PATH` 清空时显式降级 + Go 解析器兜底 |
 | `tests/live/` | 真实主机：引擎检测、区域与记录、`example.com` A 真实查询、未知区域 `E_NOTFOUND` |
@@ -203,7 +243,7 @@ resolv=[127.0.0.53]
 ## 未完成项（后续版本）
 
 - **写路径的真实服务器验收未做**：本机（2026-11-23）没有运行中的 bind9、也没有 `rndc`；`nsupdate` / `dig` 已安装，但无 `allow-update` 的权威实例可连。写入链路由 mock 宿主单测覆盖（argv、脚本形状、校验、回滚、journal），**未连真实 DNS 服务**（不说成"已实测生效"）。
-- **zone 生命周期**：新建/删除 zone 需要改 `named.conf` 与 zone 文件（root 配置面），本版只做记录级动态更新。
+- **zone 生命周期**：新建/删除 zone 需要改 `named.conf` 与 zone 文件（一次性系统配置），本版不在面板里做，由面板给出四段可复制命令、用户手工执行（ADR-0051）。
 - **bind9 重载 / zone 写入经提权通道未落地**：`rndc`、`named-checkzone` 与写文件命令都不在 ADR-0022 的形状表内，声明即被安装期拒绝；需 kore 侧扩展形状表 + 新 SDK 后才能补（本版只声明 `resolved-flush-caches`，bind9 reload 仍需 `sudo`）。
 - **root 成功路径未在本机验证**：本机以普通用户运行，只能验证「非 root → `E_NEED_ROOT` + hint」与「通道缺失 → `E_NEED_ROOT`」；`resolvectl flush-caches` 以 uid=0 执行的真实成功路径**未验证**（不写成已实测）。
 - **dnsmasq / systemd-resolved / CoreDNS 写入**：没有等价的动态更新接口，写方法对它们一律 `E_UNSUPPORTED`（不静默失败）。

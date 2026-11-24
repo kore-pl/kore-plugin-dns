@@ -64,9 +64,13 @@ func invalidParam(message string) *pluginapi.Error {
 }
 
 // needRoot 构造 E_NEED_ROOT 错误体 + 可操作 hint（ADR-0018 降级硬要求）。
+//
+// 0.5.1 起 hint 不再只给「sudo 启动 kored」：先给两条用户自己能做的替代
+// （chmod 0644 / 放进 /var/lib/kore/dns 并 include，见 ADR-0051 §5.1.3），
+// 提权只作为兜底，避免「明明改个权限就能修」却去动 kored 的运行身份。
 func needRoot(path string) *pluginapi.Error {
 	detail := encodeDetail(map[string]string{
-		"hint": "读取 " + path + " 需要 root 权限：请用 sudo 启动 kored，或把该路径加入 kore 的 root_actions 只读动作（见 docs/DECISIONS/0018-privilege-model.md）。",
+		"hint": readDeniedHint(path),
 		"path": path,
 	})
 	return &pluginapi.Error{
@@ -76,9 +80,11 @@ func needRoot(path string) *pluginapi.Error {
 	}
 }
 
-// readRoots 是只读路径白名单：插件只允许读这四个位置（GB-04 路径白名单）。
+// readRoots 是只读路径白名单：插件只允许读这五个位置（GB-04 路径白名单）。
 // /etc/dnsmasq.conf 是单文件配置，与 /etc/dnsmasq.d 同域，因此单列。
-var readRoots = []string{"/etc/bind", "/etc/dnsmasq.d", "/var/lib/bind", "/etc/dnsmasq.conf"}
+// /var/lib/kore 是 Kore 自有目录：0.5.1 起成为「区域文件读不到」的替代落点
+// （ADR-0051 §5.1.3），用户把 zone 文件放进来并 include，插件以自身用户即可读。
+var readRoots = []string{"/etc/bind", "/etc/dnsmasq.d", "/var/lib/bind", "/etc/dnsmasq.conf", "/var/lib/kore"}
 
 // AllowedReadRoots 返回只读白名单根（配置校验与文档共用）。
 func AllowedReadRoots() []string {

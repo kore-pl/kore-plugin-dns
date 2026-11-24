@@ -1,3 +1,35 @@
+## 0.5.1 — 2026-11-24
+
+### 变更（可用性：把「做不到」变成「用户能自己做到」）
+
+- **`dns.reload` 文案立住定位**：成功结果与失败 hint 都写明「记录变更走 RFC 2136 动态更新、立即生效、
+  不需要 reload；本操作只用于手工改过 zone 文件或 named.conf 之后」。bind9 成功文案从「区域已重新加载」
+  改为带定位的整句（旧文案容易被误读成「改记录也要 reload」）；失败 hint 保留可直接执行的
+  `sudo rndc reload [zone]` 与 `sudo systemctl reload named`，并去掉用户看不懂的内部形状表说明。
+- **未知 zone / 空区域列表给四段可复制命令**（ADR-0051 §5.1.2）：`dns.records` 命中未知区域、`dns.zones`
+  为空、`record.*` 写入未声明区域时，`detail.hint` 直接输出 zone 块（含 `allow-update { key ... }`）、
+  最小区域文件、`named-checkzone`、`rndc reconfig`、`dig` 验证；域名与文件路径按本次操作填好，
+  `kore-update` 明示为 TSIG 密钥名占位。插件**不执行**这些命令、不写宿主文件、不新增 root 动作。
+- **记录读取降级补两条自助替代**（ADR-0051 §5.1.3）：`E_NEED_ROOT` 与区域文件不可读的 hint 从
+  「sudo 启动 kored」改为 ① `sudo chmod 0644 <区域文件>`；② 放进 `/var/lib/kore/dns` 并在 named.conf 里
+  `include`（同时把 `/var/lib/kore` 加入插件只读白名单，保证这条替代路径真的可读，不是文案谎言）；
+  另给 `dns.query` 直查兜底。
+- 文档：README 新增「新建 zone：面板给命令，用户执行（0.5.1）」小节，降级表 / 路径白名单 / 未完成项同步；
+  `info.json` + `manifest.json` 版本同步。
+
+### 测试
+
+- 新增 `internal/dnsop/ux_guide_test.go`：四段命令存在性 + 域名填充 + **反例自证**（只有一句话的旧文案、
+  逐段删掉任一命令都必须判不合格）、reload 文案正反例、读取降级两条替代、`/var/lib/kore/dns` 下的区域
+  真实可读（证明替代路径有效）。
+- `root_action_declaration_test.go` **未改动**：`root_actions` 仍只有 `resolved-flush-caches`，
+  `TestBlockedDNSActionsRejectedByPolicy` 继续钉住 `rndc` / `named-checkzone` / 写文件动作必须被拒。
+
+### 判定
+
+- patch bump `0.5.0 → 0.5.1`：只有提示文案、只读路径白名单（新增 Kore 自有目录）与文档变化，
+  无新方法、无新入参、无新 root 动作、无协议/schema 变更。
+
 ## 0.5.0 — 2026-11-24
 
 ### 新增

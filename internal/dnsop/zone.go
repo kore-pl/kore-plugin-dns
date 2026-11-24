@@ -47,7 +47,8 @@ func (d Detector) Zones(ctx context.Context, preferred string) (ZonesResult, *pl
 	}
 	if permissionBlocked {
 		result.ErrorCode = CodeNeedRoot
-		result.Hint = "区域文件存在但当前用户读不到（需要 root）：请用 sudo 启动 kored，或把区域目录的只读权限授予 kore 运行用户。"
+		// 不再只让用户「sudo 启动 kored」：先给两条自助替代（ADR-0051 §5.1.3）。
+		result.Hint = "区域文件存在但当前用户读不到。" + readFallbackHints("")
 		return result, nil
 	}
 	if !status.Available {
@@ -55,9 +56,11 @@ func (d Detector) Zones(ctx context.Context, preferred string) (ZonesResult, *pl
 		result.Hint = status.Hint + "；区域列表只来自 bind9 与 dnsmasq 的配置，systemd-resolved 与 CoreDNS 不管理区域文件。"
 		return result, nil
 	}
-	result.Hint = "未发现区域定义：bind9 读 " + paths.BindConf + "（含 named.conf 声明的 zone 块），" +
-		"dnsmasq 读 " + paths.DnsmasqConf + " 与 " + paths.DnsmasqDir + "/ 下的 address=/server= 指令；" +
-		"systemd-resolved 与 CoreDNS 不管理区域文件，因此没有区域列表。"
+	result.Hint = appendGuide(
+		"未发现区域定义：bind9 读 "+paths.BindConf+"（含 named.conf 声明的 zone 块），"+
+			"dnsmasq 读 "+paths.DnsmasqConf+" 与 "+paths.DnsmasqDir+"/ 下的 address=/server= 指令；"+
+			"systemd-resolved 与 CoreDNS 不管理区域文件，因此没有区域列表。",
+		zoneSetupGuide("", paths.BindConf))
 	return result, nil
 }
 
@@ -84,7 +87,7 @@ func (d Detector) Records(ctx context.Context, zone string) (RecordsResult, *plu
 			return RecordsResult{}, &pluginapi.Error{
 				Code:    pluginapi.E_NOTFOUND,
 				Message: "区域 " + name + " 的数据文件不可读：" + item.entry.File,
-				Detail:  encodeDetail(map[string]string{"hint": "检查该路径是否存在、是否为符号链接指向不可读位置。"}),
+				Detail:  encodeDetail(map[string]string{"hint": readDeniedHint(item.entry.File)}),
 			}
 		}
 		records := item.records
@@ -117,6 +120,9 @@ func (d Detector) Records(ctx context.Context, zone string) (RecordsResult, *plu
 	} else if len(warnings) > 0 {
 		hint = warnings[0]
 	}
+	// 未知区域不是「到此为止」：附上可复制的建 zone 四段命令，让用户自己就能补上
+	// （ADR-0051 §5.1.2：不在面板里做，但也不能只回一句「不存在」）。
+	hint = appendGuide(hint, zoneSetupGuide(name, d.paths().BindConf))
 	return RecordsResult{}, &pluginapi.Error{
 		Code:    pluginapi.E_NOTFOUND,
 		Message: "未知区域：" + name,

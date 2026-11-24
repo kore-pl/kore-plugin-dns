@@ -374,6 +374,10 @@ func writeFragmentLines(path string, lines []string) *pluginapi.Error {
 // Reload 让服务重新加载：bind9 走 rndc reload（需要本机 rndc.key，非 root 通常拿不到 →
 // E_NEED_ROOT + hint）；dnsmasq 返回「需要重启」的提示，插件绝不启停宿主服务。
 //
+// 定位（ADR-0051 §1.2）：**记录变更不需要 reload**——RFC 2136 动态更新立即生效；
+// 本操作只用于「手工改过 zone 文件 / named.conf」后的重新加载，文案必须把这点说清，
+// 避免用户把「改记录」和「重载服务」混为一谈。
+//
 // zone 是 dns.reload 唯一合法入参（可选，见 call.go 的 reloadParams）：为空表示重载整个引擎，
 // 非空表示只重载该区域。用哪个引擎由 writableEngine 按配置/探测决定，调用方不能传入 engine。
 func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *pluginapi.Error) {
@@ -403,10 +407,10 @@ func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *plugi
 		out, err := d.Host.Run(ctx, "rndc", argv...)
 		if err != nil {
 			detail := map[string]string{
-				"hint": "rndc 需要与 named 匹配的 rndc.key（通常 root 可读）。改用 sudo " + command +
-					" 或 sudo systemctl reload named 后重试；动态更新本身不需要 reload（立即生效）。" +
-					"注意：本版内核的 root_actions 形状表（ADR-0022）没有开放 rndc 命令，" +
-					"因此该动作不能经提权通道执行（声明会在安装期被 E_INVALID 拒绝），只能用 sudo 手工执行。",
+				"hint": "记录变更走 RFC 2136 动态更新，立即生效、不需要 reload；" +
+					"本操作只在你手工改过 zone 文件或 named.conf 后才需要。" +
+					"请执行 sudo " + command + " 或 sudo systemctl reload named 后重试" +
+					"（rndc 要用与 named 匹配的 rndc.key，通常只有 root 可读；插件不会自行提权，也不启停宿主服务）。",
 				"command": command, "error": truncate(err.Error(), 500),
 			}
 			if snippet := strings.TrimSpace(strings.Join(strings.Fields(out), " ")); snippet != "" {
@@ -414,14 +418,18 @@ func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *plugi
 			}
 			return ReloadResult{}, &pluginapi.Error{Code: CodeNeedRoot, Message: "E_NEED_ROOT: rndc 无法重载区域", Detail: encodeDetail(detail)}
 		}
-		hint := "区域已重新加载。"
+		// 成功文案同样要立住定位：只改记录不用来这里。
+		hint := "区域已重新加载（本操作只用于手工改过 zone 文件或 named.conf 之后；" +
+			"记录增删改走 RFC 2136 动态更新，立即生效，不需要 reload）。"
 		if zone == "" {
-			hint = "全部区域已重新加载。"
+			hint = "全部区域已重新加载（本操作只用于手工改过 zone 文件或 named.conf 之后；" +
+				"记录增删改走 RFC 2136 动态更新，立即生效，不需要 reload）。"
 		}
 		return ReloadResult{Engine: engine, Reloaded: true, Command: command, Hint: hint}, nil
 	case EngineDnsmasq:
 		return ReloadResult{Engine: engine, ReloadRequired: true,
-			Hint: "dnsmasq 没有安全的在线重载通道：请执行 sudo systemctl restart dnsmasq（插件不启停宿主服务）。"}, nil
+			Hint: "dnsmasq 没有安全的在线重载通道：改过 dnsmasq 配置或插件生成的 hosts 片段后，" +
+				"请执行 sudo systemctl restart dnsmasq（插件不启停宿主服务）；只是增删记录时不需要做这一步。"}, nil
 	default:
 		return ReloadResult{}, unsupportedWrite(engine)
 	}
@@ -453,5 +461,6 @@ func (d Detector) reloadResolvedCaches(ctx context.Context) (ReloadResult, *plug
 		return ReloadResult{}, &pluginapi.Error{Code: pluginapi.E_UPSTREAM, Message: "E_UPSTREAM: resolvectl flush-caches 执行失败", Detail: encodeDetail(detail)}
 	}
 	return ReloadResult{Engine: EngineSystemdResolved, Reloaded: true, Command: ResolvedFlushCommand,
-		Hint: "已刷新 systemd-resolved 缓存；该引擎没有区域概念，dns.reload 不接受 zone（始终整体刷新）。"}, nil
+		Hint: "已刷新 systemd-resolved 缓存；该引擎没有区域概念，dns.reload 不接受 zone（始终整体刷新）。" +
+			"本操作只刷新解析缓存，记录变更走 RFC 2136 动态更新、立即生效，不需要 reload。"}, nil
 }

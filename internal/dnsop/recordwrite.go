@@ -209,12 +209,15 @@ func (d Detector) resolveWriteZone(zone string) *pluginapi.Error {
 		}
 		return nil
 	}
-	hint := "先把 zone 加入 bind_conf（" + d.paths().BindConf + "）并 reload bind9；写入只对 bind9 声明的区域生效。"
+	// 不把「zone 不存在」写成死路：附可复制的四段命令，用户自己就能声明该区域
+	// （ADR-0051 §5.1.2；面板没有「新建 zone」按钮，代价已在 ADR 里明说）。
+	hint := "这个 zone 还没在 named.conf 里声明，记录写入只对已声明的 bind9 区域生效。"
 	if blocked {
-		hint = "区域声明文件不可读（可能需要 root）：" + strings.Join(warnings, "；") + "；" + hint
+		hint = "区域声明文件读不到：" + strings.Join(warnings, "；") + "。" + readFallbackHints("")
 	} else if len(available) > 0 {
-		hint = "可用区域：" + strings.Join(available, "、") + "；" + hint
+		hint = "可用区域：" + strings.Join(available, "、") + "。" + hint
 	}
+	hint = appendGuide(hint, zoneSetupGuide(zone, d.paths().BindConf))
 	return &pluginapi.Error{
 		Code:    pluginapi.E_NOTFOUND,
 		Message: "区域 " + zone + " 不在 bind9 区域声明中",
