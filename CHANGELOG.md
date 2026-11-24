@@ -1,3 +1,27 @@
+## 0.5.2 — 2026-11-24
+
+### 修复（P2 竞态：并发写 dnsmasq 片段丢更新 / 半写，commit f32b3d9）
+
+- **根因**：dnsmasq 记录写入走经典的 read→apply→write（RMW）流程，但整段没有跨进程互斥：
+  ① 多个写者并发读同一 hosts 片段、各自在本地副本上追加/删除后再整体回写，后写者覆盖先写者，造成
+  **lost update**（16 并发 add 实测只落地 5 条、**丢 11 条**）；② 临时文件用**固定名** `.tmp`，并发下
+  `rename` 互相踩踏——先完成者 rename 后临时名消失，后完成者 rename 报 **ENOENT**（32 写者实测 **23 个 ENOENT**），
+  并留下截断/半写行。两条 RED 实证均来自修复前的并发边界用例。
+- **修法**（f32b3d9，三处一起闭环）：① `dnsmasqWrite` 用**旁路 `.lock` 文件的跨进程 flock** 包住
+  read→apply→write 整段，同一时刻只有一个写者进入 RMW 临界区，消除 lost update；② `writeFragmentLines`
+  改用 **`os.CreateTemp` 唯一临时名**（同目录 O_EXCL）+ fsync 后 rename，写者之间不再争同一个临时名；
+  ③ 新增 `fragmentlock_{unix,windows,other}.go` **三平台实现**（Unix flock / Windows LockFileEx / 其余 fallback），
+  跨平台行为一致、不静默降级。
+- **测试**：新增 `internal/dnsop/write_engine_concurrency_test.go`——N 写者并发写片段无覆盖/半写、
+  16 并发 add 逐条断言无丢失（RED→GREEN）；`go test -race ./...` 与 `make check` 均 exit 0。
+- **判定**：patch bump `0.5.1 → 0.5.2`：仅并发写路径实现修复，无新方法、无新入参、无协议/schema 变更。
+
+### 测试
+
+- `internal/dnsop/write_engine_concurrency_test.go`：32 写者并发 rename 无 ENOENT、16 并发 add 零丢失、
+  片段文件无截断行（RED → GREEN 全程证据）。
+- 门禁：`go test -race ./...`（全包 race）与 `make check`（gofmt → vet → test → race 边界段）双 exit 0。
+
 ## 0.5.1 — 2026-11-24
 
 ### 变更（可用性：把「做不到」变成「用户能自己做到」）
