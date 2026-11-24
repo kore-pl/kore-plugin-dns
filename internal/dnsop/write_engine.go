@@ -128,6 +128,21 @@ func (d Detector) dnsmasqWrite(operation string, params RecordWriteParams) (Reco
 		}
 	}
 	path := filepath.Join(dir, hostsFragmentName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return RecordWriteResult{}, &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: "创建片段目录失败: " + err.Error()}
+	}
+	// read→apply→write 是一整个读-改-写临界区：旁路 .lock 文件（inode 不随 rename 更替）
+	// 上的跨进程 flock 把整段串行化，挡住并发 add 的 lost update。锁覆盖到函数返回，
+	// 包括「无变化」分支——那段也要读到一致快照才能判定幂等。
+	unlock, lockErr := lockFragment(path)
+	if lockErr != nil {
+		return RecordWriteResult{}, &pluginapi.Error{
+			Code: pluginapi.E_INTERNAL, Message: "锁定 hosts 片段失败: " + lockErr.Error(),
+			Detail: encodeDetail(map[string]string{"hint": "检查 " + dir + " 的写权限。", "path": path}),
+		}
+	}
+	defer unlock()
+
 	lines, perr := readFragmentLines(path)
 	if perr != nil {
 		return RecordWriteResult{}, perr
@@ -352,20 +367,44 @@ func fragmentTypeOf(value string) string {
 }
 
 // writeFragmentLines 原子写片段（0600），目录 0700，不改属主。
+//
+// 并发安全有两层，缺一不可：
+//  1. 调用方用 lockFragment 把 read→apply→write 整段串行化（挡 lost update）；
+//  2. 这里用 os.CreateTemp 在**同目录**建唯一临时名（内部 O_EXCL），各写者互不
+//     截断临时文件；写完 fsync 再 rename，保证落盘内容完整。
+//
+// 成功 rename 后**不**再 Remove 临时名：那个路径已不存在，而 Remove 可能误删
+// 另一个并发写者刚用 O_EXCL 建出的同名文件。只在失败路径清理自己的临时文件。
 func writeFragmentLines(path string, lines []string) *pluginapi.Error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: "创建片段目录失败: " + err.Error()}
 	}
-	tmp := path + ".tmp"
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: "创建临时片段失败: " + err.Error()}
+	}
+	tmpName := tmp.Name()
 	content := strings.Join(lines, "\n")
 	if content != "" {
 		content += "\n"
 	}
-	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+	if _, err := tmp.Write([]byte(content)); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: "写临时片段失败: " + err.Error()}
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: "同步临时片段失败: " + err.Error()}
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: "关闭临时片段失败: " + err.Error()}
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
 		return &pluginapi.Error{Code: pluginapi.E_INTERNAL, Message: "替换片段失败: " + err.Error()}
 	}
 	return nil
