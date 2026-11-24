@@ -1,3 +1,33 @@
+## 0.5.0 — 2026-11-24
+
+### 新增
+
+- **`root_actions` 声明 + 提权通道（ADR-0018 / ADR-0049）**：新增 `resolved-flush-caches` →
+  `/usr/bin/resolvectl flush-caches`（固定 argv、无追加参数、`irreversible=false`），`requires_root: true`。
+- **`dns.reload` 支持 systemd-resolved**：该引擎没有区域概念，经内核提权通道刷新缓存（此前是
+  `E_UNSUPPORTED`）；带 `zone` 入参 → `E_INVALID`（不静默忽略）；通道缺失或 kored 非 root →
+  `E_NEED_ROOT` + `sudo` hint，插件绝不自行 `sudo` / 直接执行 `resolvectl`。
+
+### 说明（范围收窄，不是省略）
+
+- 本轮**不声明** `rndc reload` / `rndc reconfig` / `named-checkzone` / 写 zone 文件：ADR-0022 的受控形状表
+  （SDK v0.1.3–v0.1.5 一致）只有 13 个命令，没有 `rndc`、没有 `named-checkzone`、也没有任何写文件内容的命令，
+  声明会被内核在安装/启用期以 `E_INVALID` 拒绝（插件不可用）。扩表属安全边界变更，需 kore 侧 ADR + 新 SDK。
+- bind9 的 `dns.reload` 行为不变（`rndc reload [zone]`，失败 `E_NEED_ROOT`），hint 增补「形状表未开放 rndc」的说明。
+
+### 测试
+
+- 新增 `internal/dnsop/root_reload_test.go`：断言 resolved 分支**实际调用的 action_id 与零追加参数**
+  （防 `engine`/`zone` 混入 argv 的同类错误复现）、带 zone 时拒绝且不触碰通道、内核 `E_NEED_ROOT` 映射与 hint、
+  通道缺失降级、非零退出码归 `E_UPSTREAM`、声明 argv 通过 `ValidateRootAction`。
+- 新增 `root_action_declaration_test.go`：声明 ↔ 代码一一对应（删声明即失败）、逐条跑 SDK 校验；
+  `TestBlockedDNSActionsRejectedByPolicy` 断言 `rndc` / `named-checkzone` / 写文件动作**必须**被形状表拒绝。
+
+### 判定
+
+- 新增对外能力（reload 对 systemd-resolved 可用）+ 新增协议声明 `root_actions` → minor bump `0.4.2 → 0.5.0`。
+- **未验证**：本机为普通用户，uid=0 下 `resolvectl flush-caches` 的真实成功路径未实测（只验证了非 root 报错与通道缺失降级）。
+
 ## 0.4.2 — 2026-11-24
 
 ### 变更

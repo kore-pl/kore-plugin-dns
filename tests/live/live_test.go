@@ -59,6 +59,13 @@ type session struct {
 // openSession 在临时 UDS 上拉起插件并完成 kore.hello 握手。
 func openSession(t *testing.T) *session {
 	t.Helper()
+	return openSessionEnv(t)
+}
+
+// openSessionEnv 与 openSession 相同，但允许附加/覆盖插件环境变量。
+// 追加项在 os.Environ 之后，Go 会按「最后一条生效」去重（用于显式清空 KORE_KERNEL_SOCK 等）。
+func openSessionEnv(t *testing.T, extra ...string) *session {
+	t.Helper()
 	binary := findBinary(t)
 	sock := filepath.Join(t.TempDir(), "kore.sock")
 	listener, err := net.Listen("unix", sock)
@@ -66,11 +73,11 @@ func openSession(t *testing.T) *session {
 		t.Fatalf("监听 UDS 失败: %v", err)
 	}
 	cmd := exec.Command(binary)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(append(os.Environ(),
 		"KORE_PLUGIN_SOCK="+sock,
 		"KORE_STATE_DIR="+t.TempDir(),
 		"KORE_LOG_LEVEL=error",
-	)
+	), extra...)
 	if err := cmd.Start(); err != nil {
 		_ = listener.Close()
 		t.Fatalf("启动插件失败: %v", err)

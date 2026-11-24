@@ -122,6 +122,8 @@ type config struct {
 	// values / source 是 config.get 的当前值与来源（file / env / default）。
 	values fileValues
 	source string
+	// root 是内核提权通道（root_actions）；nil 表示环境变量三要素缺失（直接运行/非 kore 启动）。
+	root dnsop.RootRunner
 }
 
 // loadConfig 读取配置契约与环境变量，解析内嵌清单。
@@ -154,6 +156,7 @@ func loadConfig() (*config, error) {
 		store:        store,
 		values:       values,
 		source:       source,
+		root:         rootRunnerFromEnv(),
 	}
 	if cfg.id == "" {
 		cfg.id = m.ID
@@ -467,6 +470,7 @@ func (c *config) detector() dnsop.Detector {
 		Paths:         c.paths(),
 		DefaultEngine: c.values.Engine,
 		Write:         c.writeOptions(),
+		Root:          c.root,
 	}
 }
 

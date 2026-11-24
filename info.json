@@ -1,7 +1,7 @@
 {
   "id": "dns",
   "name": "DNS 区域 / 记录管理插件",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "protocol": "kore.plugin.v1",
   "lifecycle": "lazy",
   "depth_level": "basic",
@@ -36,5 +36,18 @@
     "ops",
     "web"
   ],
-  "size_bytes": 1657730
+  "size_bytes": 2966774,
+  "requires_root": true,
+  "root_actions": [
+    {
+      "id": "resolved-flush-caches",
+      "argv": [
+        "/usr/bin/resolvectl",
+        "flush-caches"
+      ],
+      "timeout_s": 15,
+      "irreversible": false,
+      "description": "刷新 systemd-resolved 缓存（dns.reload 在 systemd-resolved 引擎下经内核提权通道执行；固定 argv，不改 /etc/resolv.conf，不写任何文件）"
+    }
+  ]
 }

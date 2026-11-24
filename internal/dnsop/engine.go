@@ -28,6 +28,9 @@ type Detector struct {
 	DefaultEngine string
 	// Write 是记录写入通道配置（bind9 动态更新）；只读方法不使用。
 	Write WriteOptions
+	// Root 是内核提权通道（root_actions）；nil 表示通道未注入（直接运行/非 kore 启动）。
+	// 只有 dns.reload 的 systemd-resolved 分支使用它（resolvectl flush-caches 需要 root）。
+	Root RootRunner
 }
 
 // paths 返回补齐默认值后的路径集合。

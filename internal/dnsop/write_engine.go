@@ -386,6 +386,13 @@ func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *plugi
 		return ReloadResult{}, invalidParam("zone 不合法：需要小写域名（例如 example.com）")
 	}
 	switch engine {
+	case EngineSystemdResolved:
+		// systemd-resolved 没有区域概念：单区域 reload 无意义，直接拒绝而不是静默忽略 zone
+		// （静默忽略会让调用方以为只刷新了某个区域，实际刷的是全局缓存）。
+		if zone != "" {
+			return ReloadResult{}, invalidParam("systemd-resolved 没有区域概念：dns.reload 不接受 zone，省略 zone 刷新全部缓存")
+		}
+		return d.reloadResolvedCaches(ctx)
 	case EngineBind9:
 		argv := []string{"reload"}
 		if zone != "" {
@@ -397,7 +404,9 @@ func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *plugi
 		if err != nil {
 			detail := map[string]string{
 				"hint": "rndc 需要与 named 匹配的 rndc.key（通常 root 可读）。改用 sudo " + command +
-					" 或 sudo systemctl reload named 后重试；动态更新本身不需要 reload（立即生效）。",
+					" 或 sudo systemctl reload named 后重试；动态更新本身不需要 reload（立即生效）。" +
+					"注意：本版内核的 root_actions 形状表（ADR-0022）没有开放 rndc 命令，" +
+					"因此该动作不能经提权通道执行（声明会在安装期被 E_INVALID 拒绝），只能用 sudo 手工执行。",
 				"command": command, "error": truncate(err.Error(), 500),
 			}
 			if snippet := strings.TrimSpace(strings.Join(strings.Fields(out), " ")); snippet != "" {
@@ -416,4 +425,33 @@ func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *plugi
 	default:
 		return ReloadResult{}, unsupportedWrite(engine)
 	}
+}
+
+// reloadResolvedCaches 经内核提权通道执行 `resolvectl flush-caches`（固定 argv、无追加参数）。
+//
+// 为什么走 root_actions：resolved 的缓存由系统服务持有，普通用户没有刷新权限；
+// 插件进程永不自行 sudo，只能把固定 argv 交给内核以 uid=0 执行（ADR-0018）。
+// argv 构造里**没有任何入参拼接**：zone 已在调用方被拒绝，engine 由 switch 决定——
+// 从结构上杜绝 0.4.1 那类「engine 被当成 zone 传给 rndc」的混用。
+func (d Detector) reloadResolvedCaches(ctx context.Context) (ReloadResult, *pluginapi.Error) {
+	if d.Root == nil {
+		return ReloadResult{}, rootChannelUnavailable()
+	}
+	out, err := d.Root.RunRootAction(ctx, RootActionResolvedFlush, nil)
+	if err != nil {
+		return ReloadResult{}, rootActionFailed(out, err)
+	}
+	if out.ExitCode != 0 {
+		detail := map[string]string{
+			"action":    RootActionResolvedFlush,
+			"exit_code": strconv.Itoa(out.ExitCode),
+			"hint":      "resolvectl flush-caches 返回非零：确认 systemd-resolved 正在运行（systemctl status systemd-resolved）后重试。",
+		}
+		if snippet := strings.TrimSpace(out.Stderr); snippet != "" {
+			detail["stderr"] = truncate(snippet, 1000)
+		}
+		return ReloadResult{}, &pluginapi.Error{Code: pluginapi.E_UPSTREAM, Message: "E_UPSTREAM: resolvectl flush-caches 执行失败", Detail: encodeDetail(detail)}
+	}
+	return ReloadResult{Engine: EngineSystemdResolved, Reloaded: true, Command: ResolvedFlushCommand,
+		Hint: "已刷新 systemd-resolved 缓存；该引擎没有区域概念，dns.reload 不接受 zone（始终整体刷新）。"}, nil
 }
