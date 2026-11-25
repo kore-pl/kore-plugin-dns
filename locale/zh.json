@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "DNS 区域 / 记录管理插件",
+    "description": "检测 systemd-resolved / dnsmasq / bind9 / CoreDNS，读取区域与记录、真实查询，并通过 RFC 2136 动态更新写入记录；不内置 DNS 服务、不写宿主配置。",
+    "detail": "docs/DETAIL.md"
+  }
+}

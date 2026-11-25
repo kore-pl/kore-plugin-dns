@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "DNS-Zonen-/Eintragsverwaltungs-Plugin",
+    "description": "Erkennt systemd-resolved / dnsmasq / bind9 / CoreDNS, liest Zonen und Einträge, führt echte Abfragen aus und schreibt Einträge per RFC 2136 Dynamic Update; kein integrierter DNS-Server und keine Änderung der Host-Konfiguration.",
+    "detail": "docs/DETAIL.de.md"
+  }
+}

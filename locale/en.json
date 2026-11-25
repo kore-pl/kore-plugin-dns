@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "DNS Zone / Record Management Plugin",
+    "description": "Detects systemd-resolved / dnsmasq / bind9 / CoreDNS, reads zones and records, performs real queries, and writes records via RFC 2136 dynamic update; no bundled DNS server and no host config edits.",
+    "detail": "docs/DETAIL.en.md"
+  }
+}

@@ -1,5 +1,7 @@
 # kore-plugin-dns
 
+语言：[简体中文](docs/DETAIL.md) · [English](docs/DETAIL.en.md) · [Español](docs/DETAIL.es.md) · [Français](docs/DETAIL.fr.md) · [Deutsch](docs/DETAIL.de.md) · [Русский](docs/DETAIL.ru.md) · [Português](docs/DETAIL.pt.md)
+
 kore 的 **DNS 检测 / 区域读取 / 真实查询 / 记录写入插件**（L1.5 → 可写：仅 bind9 动态更新）。`info.json.depth_level = "basic"`：功能达 L1.5，故障注入尚未覆盖规范要求的四类（见「未完成项」）。
 
 ## 定位与边界
@@ -272,3 +274,7 @@ resolv=[127.0.0.53]
 - **相关仓库**：[索引 kore-plugins](https://github.com/kore-pl/kore-plugins) · [协议文档](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-PROTOCOL.md) · [SDK 指南](https://github.com/kore-pl/kore/blob/main/docs/PLUGIN-SDK.md)
 
 <!-- oss:end -->
+
+## 支持本项目
+
+如果这个插件帮你省下了排查 DNS 配置与手改记录的时间，欢迎去 [GitHub 仓库](https://github.com/kore-pl/kore-plugin-dns) 点个 star ⭐——你的支持就是我继续更新的动力。

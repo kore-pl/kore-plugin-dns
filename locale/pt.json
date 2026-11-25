@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Plugin de gerenciamento de zonas e registros DNS",
+    "description": "Detecta systemd-resolved / dnsmasq / bind9 / CoreDNS, lê zonas e registros, executa consultas reais e grava registros via atualização dinâmica RFC 2136; sem servidor DNS embutido e sem alterar a configuração do host.",
+    "detail": "docs/DETAIL.pt.md"
+  }
+}
