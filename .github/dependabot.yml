@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # This Go plugin has no npm dependencies today; keep the npm entry so
+  # dependency updates stay automatic if frontend assets are added later.
+  - package-ecosystem: npm
+    directory: '/'
+    schedule:
+      interval: weekly
+
+  # Keep CI/build actions current.
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: weekly
