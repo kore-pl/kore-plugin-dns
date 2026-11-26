@@ -187,19 +187,19 @@ func (d Detector) prepareDnsmasq(operation string, params RecordWriteParams) (fr
 	recordType := strings.ToUpper(strings.TrimSpace(params.Type))
 	value := strings.TrimSpace(params.Value)
 	if zone == "" || !validDNSName(zone) {
-		return fragmentSpec{}, invalidParam("zone 不合法：需要小写域名（例如 example.com）")
+		return fragmentSpec{}, invalidParam("zone 不合法：需要小写域名（例如 example.com），请按示例填写")
 	}
 	if name == "" || !validDNSName(name) {
-		return fragmentSpec{}, invalidParam("name 不合法：需要完整记录名（例如 www.example.com）")
+		return fragmentSpec{}, invalidParam("name 不合法：需要完整记录名（例如 www.example.com），请按示例填写")
 	}
 	if name != zone && !strings.HasSuffix(name, "."+zone) {
-		return fragmentSpec{}, invalidParam("name 不在 zone 内：记录名必须以 ." + zone + " 结尾，或等于区域名本身")
+		return fragmentSpec{}, invalidParam("name 不在 zone 内：记录名必须以 ." + zone + " 结尾，或等于区域名本身，请改用该区域内的记录名")
 	}
 	if recordType != "A" && recordType != "AAAA" && recordType != "CNAME" {
 		return fragmentSpec{}, unsupportedWriteType(recordType)
 	}
 	if params.TTL < 0 || params.TTL > maxWriteTTL {
-		return fragmentSpec{}, invalidParam("ttl 超出范围：0–" + strconv.Itoa(maxWriteTTL) + " 秒（0 表示用默认 300）")
+		return fragmentSpec{}, invalidParam("ttl 超出范围：0–" + strconv.Itoa(maxWriteTTL) + " 秒（0 表示用默认 300），请填入该范围内的值")
 	}
 	if ttl := params.TTL; ttl == 0 {
 		params.TTL = 300
@@ -214,27 +214,27 @@ func (d Detector) prepareDnsmasq(operation string, params RecordWriteParams) (fr
 		return out, nil
 	case "add", "update":
 		if value == "" {
-			return fragmentSpec{}, invalidParam(operation + " 需要 value（记录值）")
+			return fragmentSpec{}, invalidParam(operation + " 需要 value（记录值），请填写记录值后重试")
 		}
 		if recordType == "A" || recordType == "AAAA" {
 			ip := net.ParseIP(value)
 			if ip == nil {
-				return fragmentSpec{}, invalidParam(recordType + " 的值必须是 IP 地址")
+				return fragmentSpec{}, invalidParam(recordType + " 的值必须是 IP 地址，请填写合法 IP 后重试")
 			}
 			if recordType == "A" && ip.To4() == nil {
-				return fragmentSpec{}, invalidParam("A 记录需要 IPv4 地址")
+				return fragmentSpec{}, invalidParam("A 记录需要 IPv4 地址，请填写形如 192.0.2.1 的地址")
 			}
 			if recordType == "AAAA" && ip.To4() != nil {
-				return fragmentSpec{}, invalidParam("AAAA 记录需要 IPv6 地址")
+				return fragmentSpec{}, invalidParam("AAAA 记录需要 IPv6 地址，请填写合法的 IPv6 地址")
 			}
 			value = ip.String()
 		} else if !validDNSName(strings.TrimSuffix(value, ".")) {
-			return fragmentSpec{}, invalidParam("CNAME 的值必须是域名（例如 target.example.com）")
+			return fragmentSpec{}, invalidParam("CNAME 的值必须是域名（例如 target.example.com），请按示例填写")
 		}
 		out.Value = value
 		return out, nil
 	default:
-		return fragmentSpec{}, invalidParam("未知写入操作：" + operation)
+		return fragmentSpec{}, invalidParam("未知写入操作：" + operation + "，请使用 add/update/delete")
 	}
 }
 
@@ -426,14 +426,14 @@ func (d Detector) Reload(ctx context.Context, zone string) (ReloadResult, *plugi
 	}
 	zone = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(zone), "."))
 	if zone != "" && !validDNSName(zone) {
-		return ReloadResult{}, invalidParam("zone 不合法：需要小写域名（例如 example.com）")
+		return ReloadResult{}, invalidParam("zone 不合法：需要小写域名（例如 example.com），请按示例填写")
 	}
 	switch engine {
 	case EngineSystemdResolved:
 		// systemd-resolved 没有区域概念：单区域 reload 无意义，直接拒绝而不是静默忽略 zone
 		// （静默忽略会让调用方以为只刷新了某个区域，实际刷的是全局缓存）。
 		if zone != "" {
-			return ReloadResult{}, invalidParam("systemd-resolved 没有区域概念：dns.reload 不接受 zone，省略 zone 刷新全部缓存")
+			return ReloadResult{}, invalidParam("systemd-resolved 没有区域概念：dns.reload 不接受 zone，请省略 zone 以刷新全部缓存")
 		}
 		return d.reloadResolvedCaches(ctx)
 	case EngineBind9:

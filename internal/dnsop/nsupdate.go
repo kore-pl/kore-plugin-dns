@@ -28,10 +28,10 @@ const (
 func validateWriteType(raw string) (string, *pluginapi.Error) {
 	trimmed := strings.ToUpper(strings.TrimSpace(raw))
 	if trimmed == "" {
-		return "", invalidParam("缺少必填字段 type")
+		return "", invalidParam("缺少必填字段 type，请填写记录类型后重试")
 	}
 	if _, ok := writeTypeWhitelist[trimmed]; !ok {
-		return "", invalidParam("type 不支持写入 " + raw + "：写入仅允许 A/AAAA/CNAME/MX/TXT/SRV（NS/SOA/PTR 属区域结构，不开放）")
+		return "", invalidParam("type 不支持写入 " + raw + "：写入仅允许 A/AAAA/CNAME/MX/TXT/SRV（NS/SOA/PTR 属区域结构，不开放），请改选上述类型")
 	}
 	return trimmed, nil
 }
@@ -43,28 +43,28 @@ func validateWriteType(raw string) (string, *pluginapi.Error) {
 func normalizeWriteValue(recordType, raw string) (string, *pluginapi.Error) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
-		return "", invalidParam("缺少必填字段 value")
+		return "", invalidParam("缺少必填字段 value，请填写记录值后重试")
 	}
 	if strings.ContainsAny(value, "\r\n\t\x00") {
-		return "", invalidParam("value 不能包含换行/制表/空字节")
+		return "", invalidParam("value 不能包含换行/制表/空字节，请去掉控制字符后重试")
 	}
 	switch recordType {
 	case "A":
 		ip := net.ParseIP(value)
 		if ip == nil || ip.To4() == nil {
-			return "", invalidParam("A 记录的 value 必须是 IPv4 地址")
+			return "", invalidParam("A 记录的 value 必须是 IPv4 地址，请填写形如 192.0.2.1 的地址")
 		}
 		return ip.To4().String(), nil
 	case "AAAA":
 		ip := net.ParseIP(value)
 		if ip == nil || ip.To4() != nil {
-			return "", invalidParam("AAAA 记录的 value 必须是 IPv6 地址")
+			return "", invalidParam("AAAA 记录的 value 必须是 IPv6 地址，请填写合法的 IPv6 地址")
 		}
 		return ip.String(), nil
 	case "CNAME":
 		name, perr := ValidateQueryName(value)
 		if perr != nil {
-			return "", invalidParam("CNAME 目标非法: " + perr.Message)
+			return "", invalidParam("CNAME 目标非法: " + perr.Message + "，请填写合法域名")
 		}
 		return name, nil
 	case "MX":
@@ -73,30 +73,30 @@ func normalizeWriteValue(recordType, raw string) (string, *pluginapi.Error) {
 		return normalizeSRV(value)
 	case "TXT":
 		if len(value) > 255 {
-			return "", invalidParam("TXT 单条字符串不能超过 255 字节")
+			return "", invalidParam("TXT 单条字符串不能超过 255 字节，请拆成多条后重试")
 		}
 		return value, nil
 	default:
-		return "", invalidParam("type 不支持写入 " + recordType)
+		return "", invalidParam("type 不支持写入 " + recordType + "，请改用 A/AAAA/CNAME/MX/TXT/SRV")
 	}
 }
 
 // normalizePriorityTarget 归一 `优先级 目标` 形式（MX）。
 func normalizePriorityTarget(value, recordType, shape string) (string, *pluginapi.Error) {
 	if strings.ContainsRune(value, ';') {
-		return "", invalidParam(recordType + " 的 value 不能包含 ;")
+		return "", invalidParam(recordType + " 的 value 不能包含 ;，请去掉分号后重试")
 	}
 	fields := strings.Fields(value)
 	if len(fields) != 2 {
-		return "", invalidParam(recordType + " 的 value 必须是「" + shape + "」")
+		return "", invalidParam(recordType + " 的 value 必须是「" + shape + "」，请按示例填写")
 	}
 	priority, err := strconv.Atoi(fields[0])
 	if err != nil || priority < 0 || priority > 65535 {
-		return "", invalidParam(recordType + " 的优先级必须是 0–65535")
+		return "", invalidParam(recordType + " 的优先级必须是 0–65535，请填入该范围内的整数")
 	}
 	target, perr := ValidateQueryName(fields[1])
 	if perr != nil {
-		return "", invalidParam(recordType + " 的目标非法: " + perr.Message)
+		return "", invalidParam(recordType + " 的目标非法: " + perr.Message + "，请填写合法域名")
 	}
 	return strconv.Itoa(priority) + " " + target, nil
 }
@@ -104,26 +104,26 @@ func normalizePriorityTarget(value, recordType, shape string) (string, *pluginap
 // normalizeSRV 归一 `优先级 权重 端口 目标` 形式。
 func normalizeSRV(value string) (string, *pluginapi.Error) {
 	if strings.ContainsRune(value, ';') {
-		return "", invalidParam("SRV 的 value 不能包含 ;")
+		return "", invalidParam("SRV 的 value 不能包含 ;，请去掉分号后重试")
 	}
 	fields := strings.Fields(value)
 	if len(fields) != 4 {
-		return "", invalidParam("SRV 的 value 必须是「优先级 权重 端口 目标」")
+		return "", invalidParam("SRV 的 value 必须是「优先级 权重 端口 目标」，请按示例填写")
 	}
 	numbers := make([]int, 3)
 	for index := 0; index < 3; index++ {
 		parsed, err := strconv.Atoi(fields[index])
 		if err != nil || parsed < 0 || parsed > 65535 {
-			return "", invalidParam("SRV 的优先级/权重/端口必须是 0–65535")
+			return "", invalidParam("SRV 的优先级/权重/端口必须是 0–65535，请填入该范围内的整数")
 		}
 		numbers[index] = parsed
 	}
 	if numbers[2] == 0 {
-		return "", invalidParam("SRV 的端口不能为 0")
+		return "", invalidParam("SRV 的端口不能为 0，请填写 1–65535 的端口")
 	}
 	target, perr := ValidateQueryName(fields[3])
 	if perr != nil {
-		return "", invalidParam("SRV 的目标非法: " + perr.Message)
+		return "", invalidParam("SRV 的目标非法: " + perr.Message + "，请填写合法域名")
 	}
 	return strconv.Itoa(numbers[0]) + " " + strconv.Itoa(numbers[1]) + " " +
 		strconv.Itoa(numbers[2]) + " " + target, nil

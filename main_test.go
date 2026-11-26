@@ -39,12 +39,14 @@ func releaseVersions(t *testing.T) (infoVersion, manifestVersion string) {
 }
 
 // testConfig 构造与生产一致但状态目录落在 t.TempDir() 的配置（不读环境变量）。
+// version 取 info.json 的发布版本：bump 版本后测试无需改动（Gitea issue #1）。
 func testConfig(t *testing.T) *config {
 	t.Helper()
+	infoVersion, _ := releaseVersions(t)
 	dir := t.TempDir()
 	return &config{
 		id:           "dns",
-		version:      "0.2.0",
+		version:      infoVersion,
 		requiresKore: ">=0.1.0 <0.2.0",
 		capabilities: []string{"system:read"},
 		startedAt:    time.Now(),
@@ -128,8 +130,9 @@ func writeResponse(t *testing.T, conn net.Conn, id, reqID string, result json.Ra
 	}
 }
 
-// TestHandshake 校验 hello 首帧字段与三步握手（握手版本随插件版本 0.2.0）。
+// TestHandshake 校验 hello 首帧字段与三步握手（版本只断言 semver 格式与三处同步，不锁具体值）。
 func TestHandshake(t *testing.T) {
+	infoVersion, manifestVersion := releaseVersions(t)
 	pluginConn, kernelConn := net.Pipe()
 	defer func() { _ = kernelConn.Close() }()
 	cfg := testConfig(t)
@@ -147,8 +150,14 @@ func TestHandshake(t *testing.T) {
 	if params.PluginID != "dns" || params.ID != "dns" {
 		t.Fatalf("plugin_id/id=%q/%q，期望都是 dns", params.PluginID, params.ID)
 	}
-	if params.Protocol != pluginapi.Protocol || params.Version != "0.2.0" {
-		t.Fatalf("protocol/version=%q/%q 不符合 §5", params.Protocol, params.Version)
+	if params.Protocol != pluginapi.Protocol {
+		t.Fatalf("protocol=%q，期望 %q", params.Protocol, pluginapi.Protocol)
+	}
+	if !semverPattern.MatchString(params.Version) {
+		t.Fatalf("version=%q 不是 MAJOR.MINOR.PATCH", params.Version)
+	}
+	if params.Version != infoVersion || params.Version != manifestVersion {
+		t.Fatalf("握手版本=%q 与 info.json=%q / manifest.json=%q 不一致", params.Version, infoVersion, manifestVersion)
 	}
 	if len(params.Capabilities) != 1 || params.Capabilities[0] != "system:read" {
 		t.Fatalf("capabilities=%v，期望 [system:read]", params.Capabilities)

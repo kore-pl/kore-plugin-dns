@@ -68,7 +68,7 @@ func (d Detector) Zones(ctx context.Context, preferred string) (ZonesResult, *pl
 func (d Detector) Records(ctx context.Context, zone string) (RecordsResult, *pluginapi.Error) {
 	name := normalizeZoneName(zone)
 	if name == "" {
-		return RecordsResult{}, invalidParam("缺少必填字段 zone")
+		return RecordsResult{}, invalidParam("缺少必填字段 zone，请填写区域名后重试")
 	}
 	if perr := validateZoneNameParam(name); perr != nil {
 		return RecordsResult{}, perr
@@ -365,14 +365,14 @@ func parentDomain(name string) string {
 // validateZoneNameParam 校验 dns.records 的 zone 参数形状（允许单标签，dnsmasq 的 address=/kore/ 就是单标签）。
 func validateZoneNameParam(name string) *pluginapi.Error {
 	if len(name) > maxQueryNameLen {
-		return invalidParam("zone 超过 253 字符")
+		return invalidParam("zone 超过 253 字符，请缩短区域名后重试")
 	}
 	for _, label := range strings.Split(name, ".") {
 		if label == "" {
-			return invalidParam("zone 非法：存在空标签")
+			return invalidParam("zone 非法：存在空标签，请检查区域名中的连续点号")
 		}
 		if !queryLabelRE.MatchString(label) {
-			return invalidParam("zone 非法：仅允许字母数字、连字符与下划线")
+			return invalidParam("zone 非法：仅允许字母数字、连字符与下划线，请改掉其他字符")
 		}
 	}
 	return nil
