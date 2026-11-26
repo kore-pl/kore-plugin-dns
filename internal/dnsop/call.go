@@ -150,7 +150,7 @@ func validateEngineParam(engine string) *pluginapi.Error {
 	case "", EngineAuto, EngineSystemdResolved, EngineDnsmasq, EngineBind9, EngineCoreDNS:
 		return nil
 	default:
-		return invalidParam("engine 不支持 " + engine + "：仅允许 auto/systemd-resolved/dnsmasq/bind9/coredns")
+		return invalidParam("engine 不支持 " + engine + "：仅允许 auto/systemd-resolved/dnsmasq/bind9/coredns，请改选上述引擎")
 	}
 }
 
@@ -165,7 +165,7 @@ func decodeReloadParams(raw json.RawMessage) (reloadParams, *pluginapi.Error) {
 		return p, nil
 	}
 	if raw[0] != '{' {
-		return p, invalidParam("params 必须是 JSON 对象")
+		return p, invalidParam("params 必须是 JSON 对象，请提交 JSON 对象格式的参数")
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -173,7 +173,7 @@ func decodeReloadParams(raw json.RawMessage) (reloadParams, *pluginapi.Error) {
 		if field, ok := unknownJSONField(err); ok {
 			return p, &pluginapi.Error{
 				Code:    pluginapi.E_INVALID,
-				Message: "params 含未声明的字段 " + field + "：dns.reload 只接受可选 zone（引擎由插件配置/探测决定）",
+				Message: "params 含未声明的字段 " + field + "：dns.reload 只接受可选 zone（引擎由插件配置/探测决定），请删除该字段后重试",
 				Detail: encodeDetail(map[string]string{
 					"field":   field,
 					"allowed": "zone",
@@ -181,7 +181,7 @@ func decodeReloadParams(raw json.RawMessage) (reloadParams, *pluginapi.Error) {
 				}),
 			}
 		}
-		return p, invalidParam("params 解析失败: " + err.Error())
+		return p, invalidParam("params 解析失败: " + err.Error() + "，请检查 JSON 格式后重试")
 	}
 	return p, nil
 }
@@ -208,10 +208,10 @@ func decodeParams[T any](raw json.RawMessage, dst *T) *pluginapi.Error {
 		return nil
 	}
 	if raw[0] != '{' {
-		return invalidParam("params 必须是 JSON 对象")
+		return invalidParam("params 必须是 JSON 对象，请提交 JSON 对象格式的参数")
 	}
 	if err := json.Unmarshal(raw, dst); err != nil {
-		return invalidParam("params 解析失败: " + err.Error())
+		return invalidParam("params 解析失败: " + err.Error() + "，请检查 JSON 格式后重试")
 	}
 	return nil
 }

@@ -146,11 +146,11 @@ func (d Detector) prepareWrite(operation string, params RecordWriteParams) (reco
 	switch operation {
 	case "add", "update", "delete":
 	default:
-		return recordWriteSpec{}, invalidParam("未知写入操作 " + operation)
+		return recordWriteSpec{}, invalidParam("未知写入操作 " + operation + "，请使用 add/update/delete")
 	}
 	zone := normalizeZoneName(params.Zone)
 	if zone == "" {
-		return recordWriteSpec{}, invalidParam("缺少必填字段 zone")
+		return recordWriteSpec{}, invalidParam("缺少必填字段 zone，请填写区域名后重试")
 	}
 	if perr := validateZoneNameParam(zone); perr != nil {
 		return recordWriteSpec{}, perr
@@ -160,7 +160,7 @@ func (d Detector) prepareWrite(operation string, params RecordWriteParams) (reco
 		return recordWriteSpec{}, perr
 	}
 	if name != zone && !strings.HasSuffix(name, "."+zone) {
-		return recordWriteSpec{}, invalidParam("name=" + name + " 不在 zone=" + zone + " 内")
+		return recordWriteSpec{}, invalidParam("name=" + name + " 不在 zone=" + zone + " 内，请改用该区域内的完整记录名")
 	}
 	recordType, perr := validateWriteType(params.Type)
 	if perr != nil {
@@ -168,7 +168,7 @@ func (d Detector) prepareWrite(operation string, params RecordWriteParams) (reco
 	}
 	spec := recordWriteSpec{Operation: operation, Zone: zone, Name: name, Type: recordType, TTL: params.TTL}
 	if params.TTL < 0 || params.TTL > maxWriteTTL {
-		return recordWriteSpec{}, invalidParam(fmt.Sprintf("ttl=%d 超出 [0, %d]", params.TTL, maxWriteTTL))
+		return recordWriteSpec{}, invalidParam(fmt.Sprintf("ttl=%d 超出 [0, %d]，请填入该范围内的 TTL", params.TTL, maxWriteTTL))
 	}
 	if operation != "delete" || strings.TrimSpace(params.Value) != "" {
 		value, perr := normalizeWriteValue(recordType, params.Value)
@@ -252,7 +252,7 @@ func (d Detector) fillWriteChannel(spec *recordWriteSpec) *pluginapi.Error {
 	if _, err := d.Host.ReadFile(cleaned); err != nil {
 		return &pluginapi.Error{
 			Code:    pluginapi.E_INVALID,
-			Message: "update_key_file 不可读：" + cleaned,
+			Message: "update_key_file 不可读：" + cleaned + "，请检查权限或改放可读目录后重试",
 			Detail:  encodeDetail(map[string]string{"hint": "kore 运行用户需要读该密钥（chgrp + 0640，或复制到 /var/lib/kore 下并授权）。"}),
 		}
 	}
@@ -276,7 +276,7 @@ func (d Detector) fillWriteChannel(spec *recordWriteSpec) *pluginapi.Error {
 	}
 	if net.ParseIP(server) == nil {
 		if _, perr := ValidateQueryName(server); perr != nil {
-			return invalidParam("update_server 非法：必须是 IP 或主机名")
+			return invalidParam("update_server 非法：必须是 IP 或主机名，请填写合法地址后重试")
 		}
 	}
 	spec.Server = server
@@ -285,7 +285,7 @@ func (d Detector) fillWriteChannel(spec *recordWriteSpec) *pluginapi.Error {
 		spec.Port = 53
 	}
 	if spec.Port < 1 || spec.Port > 65535 {
-		return invalidParam("update_port 必须在 1–65535")
+		return invalidParam("update_port 必须在 1–65535，请填入该范围内的端口")
 	}
 	spec.Timeout = write.Timeout
 	if spec.Timeout <= 0 {

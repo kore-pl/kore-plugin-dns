@@ -302,7 +302,7 @@ func validateValues(values fileValues) (fileValues, *pluginapi.Error) {
 	default:
 		return fileValues{}, &pluginapi.Error{
 			Code:    pluginapi.E_INVALID,
-			Message: "engine 不支持 " + values.Engine + "：仅允许 auto/systemd-resolved/dnsmasq/bind9/coredns",
+			Message: "engine 不支持 " + values.Engine + "：仅允许 auto/systemd-resolved/dnsmasq/bind9/coredns，请在插件设置里改选上述引擎",
 		}
 	}
 	values.Engine = engine
@@ -326,18 +326,18 @@ func validateValues(values fileValues) (fileValues, *pluginapi.Error) {
 	if values.QueryTimeoutMs < minQueryTimeoutMs || values.QueryTimeoutMs > maxQueryTimeoutMs {
 		return fileValues{}, &pluginapi.Error{
 			Code:    pluginapi.E_INVALID,
-			Message: fmt.Sprintf("query_timeout_ms=%d 超出 [%d, %d]", values.QueryTimeoutMs, minQueryTimeoutMs, maxQueryTimeoutMs),
+			Message: fmt.Sprintf("query_timeout_ms=%d 超出 [%d, %d]，请填入该范围内的值", values.QueryTimeoutMs, minQueryTimeoutMs, maxQueryTimeoutMs),
 		}
 	}
 	server := strings.TrimSpace(values.UpdateServer)
 	if net.ParseIP(server) == nil {
 		if _, perr := dnsop.ValidateQueryName(server); perr != nil {
-			return fileValues{}, invalidConfig("update_server 必须是 IP 或主机名（当前 " + server + "）")
+			return fileValues{}, invalidConfig("update_server 必须是 IP 或主机名（当前 " + server + "），请填写合法 IP 或域名后重试")
 		}
 	}
 	values.UpdateServer = server
 	if values.UpdatePort < minUpdatePort || values.UpdatePort > maxUpdatePort {
-		return fileValues{}, invalidConfig(fmt.Sprintf("update_port=%d 超出 [%d, %d]", values.UpdatePort, minUpdatePort, maxUpdatePort))
+		return fileValues{}, invalidConfig(fmt.Sprintf("update_port=%d 超出 [%d, %d]，请填入该范围内的端口", values.UpdatePort, minUpdatePort, maxUpdatePort))
 	}
 	if keyFile := strings.TrimSpace(values.UpdateKeyFile); keyFile != "" {
 		cleaned, perr := dnsop.ValidateWriteKeyPath(keyFile)
@@ -347,7 +347,7 @@ func validateValues(values fileValues) (fileValues, *pluginapi.Error) {
 		values.UpdateKeyFile = cleaned
 	}
 	if values.UpdateTimeoutMs < minQueryTimeoutMs || values.UpdateTimeoutMs > maxQueryTimeoutMs {
-		return fileValues{}, invalidConfig(fmt.Sprintf("update_timeout_ms=%d 超出 [%d, %d]", values.UpdateTimeoutMs, minQueryTimeoutMs, maxQueryTimeoutMs))
+		return fileValues{}, invalidConfig(fmt.Sprintf("update_timeout_ms=%d 超出 [%d, %d]，请填入该范围内的超时", values.UpdateTimeoutMs, minQueryTimeoutMs, maxQueryTimeoutMs))
 	}
 	return values, nil
 }
@@ -528,21 +528,21 @@ func configGet(c *config) (json.RawMessage, *pluginapi.Error) {
 func configSet(raw json.RawMessage, c *config) (json.RawMessage, *pluginapi.Error) {
 	var params plugincfg.SetParams
 	if len(raw) == 0 || string(raw) == "null" {
-		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "缺少必填字段 values"}
+		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "缺少必填字段 values，请提供后重试"}
 	}
 	if raw[0] != '{' {
-		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "params 必须是 JSON 对象"}
+		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "params 必须是 JSON 对象，请提交 JSON 对象格式的参数"}
 	}
 	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "params 解析失败: " + err.Error()}
+		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "params 解析失败: " + err.Error() + "，请检查 JSON 格式后重试"}
 	}
 	if len(params.Values) == 0 || string(params.Values) == "null" {
-		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "缺少必填字段 values"}
+		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "缺少必填字段 values，请提供后重试"}
 	}
 	// 以当前值为基线做局部更新：未提供的字段保持原值。
 	candidate := c.values
 	if err := json.Unmarshal(params.Values, &candidate); err != nil {
-		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "values 解析失败: " + err.Error()}
+		return nil, &pluginapi.Error{Code: pluginapi.E_INVALID, Message: "values 解析失败: " + err.Error() + "，请检查 values 字段格式后重试"}
 	}
 	normalized, perr := validateValues(fillDefaults(candidate))
 	if perr != nil {

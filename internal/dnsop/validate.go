@@ -23,23 +23,23 @@ const maxQueryNameLen = 253
 func ValidateQueryName(name string) (string, *pluginapi.Error) {
 	raw := strings.TrimSpace(name)
 	if raw == "" {
-		return "", invalidParam("缺少必填字段 name")
+		return "", invalidParam("缺少必填字段 name，请填写域名后重试")
 	}
 	if len(raw) > maxQueryNameLen+1 {
-		return "", invalidParam("name 超过 253 字符")
+		return "", invalidParam("name 超过 253 字符，请缩短域名后重试")
 	}
 	normalized := strings.ToLower(raw)
 	normalized = strings.TrimSuffix(normalized, ".")
 	if normalized == "" {
-		return "", invalidParam("name 非法：不能只含尾点")
+		return "", invalidParam("name 非法：不能只含尾点，请填写完整域名后重试")
 	}
 	labels := strings.Split(normalized, ".")
 	for _, label := range labels {
 		if label == "" {
-			return "", invalidParam("name 非法：存在空标签")
+			return "", invalidParam("name 非法：存在空标签，请检查域名中的连续点号")
 		}
 		if !queryLabelRE.MatchString(label) {
-			return "", invalidParam("name 非法：仅允许字母数字、连字符与下划线")
+			return "", invalidParam("name 非法：仅允许字母数字、连字符与下划线，请改掉其他字符")
 		}
 	}
 	return normalized, nil
@@ -53,7 +53,7 @@ func ValidateQueryType(recordType string) (string, *pluginapi.Error) {
 	}
 	upper := strings.ToUpper(trimmed)
 	if _, ok := queryTypeWhitelist[upper]; !ok {
-		return "", invalidParam("type 不支持 " + trimmed + "：仅允许 A/AAAA/CNAME/MX/NS/TXT/SRV/CAA/SOA/PTR")
+		return "", invalidParam("type 不支持 " + trimmed + "：仅允许 A/AAAA/CNAME/MX/NS/TXT/SRV/CAA/SOA/PTR，请改选上述类型")
 	}
 	return upper, nil
 }
@@ -108,14 +108,14 @@ func AllowedWriteKeyRoots() []string {
 func ValidateWriteKeyPath(path string) (string, *pluginapi.Error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
-		return "", invalidParam("update_key_file 不能为空（留空表示不启用写入）")
+		return "", invalidParam("update_key_file 不能为空（留空表示不启用写入），请填写密钥文件路径或确认不需要写入")
 	}
 	if !strings.HasPrefix(trimmed, "/") {
-		return "", invalidParam("update_key_file 必须是绝对路径")
+		return "", invalidParam("update_key_file 必须是绝对路径，请填写以 / 开头的路径")
 	}
 	cleaned := cleanPath(trimmed)
 	if strings.Contains(cleaned, "..") {
-		return "", invalidParam("update_key_file 不允许包含 ..")
+		return "", invalidParam("update_key_file 不允许包含 ..，请使用不含上级跳转的路径")
 	}
 	allowed := false
 	for _, root := range writeKeyRoots {
@@ -125,7 +125,7 @@ func ValidateWriteKeyPath(path string) (string, *pluginapi.Error) {
 		}
 	}
 	if !allowed {
-		return "", invalidParam("update_key_file 不在白名单内（允许：" + strings.Join(writeKeyRoots, "、") + "）")
+		return "", invalidParam("update_key_file 不在白名单内（允许：" + strings.Join(writeKeyRoots, "、") + "），请把密钥放到白名单目录")
 	}
 	return cleaned, nil
 }
@@ -152,17 +152,17 @@ func WithinReadRoots(path string) bool {
 func ValidateReadPath(field, path string) (string, *pluginapi.Error) {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
-		return "", invalidParam("缺少必填字段 " + field)
+		return "", invalidParam("缺少必填字段 " + field + "，请填写后重试")
 	}
 	if !strings.HasPrefix(trimmed, "/") {
-		return "", invalidParam(field + " 必须是绝对路径")
+		return "", invalidParam(field + " 必须是绝对路径，请填写以 / 开头的路径")
 	}
 	cleaned := cleanPath(trimmed)
 	if strings.Contains(cleaned, "..") {
-		return "", invalidParam(field + " 不允许包含 ..")
+		return "", invalidParam(field + " 不允许包含 ..，请使用不含上级跳转的路径")
 	}
 	if !WithinReadRoots(cleaned) {
-		return "", invalidParam(field + " 不在只读白名单内（允许：" + strings.Join(readRoots, "、") + "）")
+		return "", invalidParam(field + " 不在只读白名单内（允许：" + strings.Join(readRoots, "、") + "），请把路径改到白名单内")
 	}
 	return cleaned, nil
 }
